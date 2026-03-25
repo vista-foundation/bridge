@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import type { WalletBalance } from "../bridge-data";
-import { bridgeApi } from "../api-client";
 
 interface UseWalletBalanceResult {
   balances: WalletBalance[];
@@ -11,23 +10,20 @@ interface UseWalletBalanceResult {
 }
 
 /**
- * Queries wallet balances using two strategies:
- * 1. Backend UTXORPC query (works for any address — no wallet extension needed)
- * 2. Mesh SDK BrowserWallet fallback (for connected Cardano wallets)
- *
- * The backend route is preferred because it works for pasted addresses too.
+ * Queries wallet balances from the connected wallet's CIP-30 API.
+ * No backend call needed — the wallet extension provides balances directly.
  */
 export function useWalletBalance(
   walletInstance: unknown | null,
   networkId: string | null,
-  address: string | null = null,
+  _address: string | null = null,
 ): UseWalletBalanceResult {
   const [balances, setBalances] = useState<WalletBalance[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!networkId || (!walletInstance && !address)) {
+    if (!walletInstance || !networkId) {
       setBalances([]);
       return;
     }
@@ -37,38 +33,6 @@ export function useWalletBalance(
     setError(null);
 
     const fetchBalances = async () => {
-      // Strategy 1: Use backend UTXORPC query if we have an address
-      if (address && networkId === "cardano") {
-        try {
-          const resp = await bridgeApi.getBalance(address);
-          if (cancelled) return;
-
-          const parsed: WalletBalance[] = resp.assets.map((asset) => {
-            if (asset.unit === "lovelace") {
-              const ada = Number(BigInt(asset.quantity)) / 1_000_000;
-              return {
-                symbol: "ADA",
-                balance: ada.toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 6,
-                }),
-              };
-            }
-            return {
-              symbol: asset.symbol,
-              balance: Number(asset.quantity).toLocaleString(),
-            };
-          });
-
-          setBalances(parsed);
-          setLoading(false);
-          return;
-        } catch {
-          // Fall through to Mesh SDK
-        }
-      }
-
-      // Strategy 2: Use Mesh SDK BrowserWallet directly
       if (walletInstance) {
         try {
           const wallet = walletInstance as {
@@ -131,7 +95,7 @@ export function useWalletBalance(
     return () => {
       cancelled = true;
     };
-  }, [walletInstance, networkId, address]);
+  }, [walletInstance, networkId, _address]);
 
   return { balances, loading, error };
 }

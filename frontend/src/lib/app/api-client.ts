@@ -1,7 +1,6 @@
 import type {
   ApiBridgeConfig,
   ApiBridgeState,
-  ApiBalanceResponse,
   ApiDepositStatus,
   ApiHealthResponse,
   ApiRegisterDepositRequest,
@@ -43,7 +42,4 @@ export const bridgeApi = {
 
   registerDeposit: (req: ApiRegisterDepositRequest) =>
     apiPost<ApiRegisterDepositResponse>("/api/deposit/register", req),
-
-  getBalance: (address: string) =>
-    apiGet<ApiBalanceResponse>(`/api/balance/${address}`),
 };

@@ -6,8 +6,6 @@ import { testWalletRoutes } from "./test-wallet.js";
 import type {
   ApiBridgeConfig,
   ApiBridgeState,
-  ApiBalanceResponse,
-  ApiBalanceAsset,
   ApiDepositStatus,
   ApiHealthResponse,
   ApiRegisterDepositResponse,
@@ -217,90 +215,8 @@ export function createApiServer(
       },
     )
 
-    // ── Balance query via Koios REST API ─────────────────────────
-    .get("/api/balance/:address", async ({ params, set }): Promise<ApiBalanceResponse | { error: string }> => {
-      try {
-        // Use the source network's Koios provider for balance queries
-        const koiosBase = config.networks.source.lucidProvider;
+    // ── Test wallet routes (dev/test only — includes balance query via Koios) ─
 
-        const resp = await fetch(`${koiosBase}/address_info`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ _addresses: [params.address] }),
-        });
-
-        if (!resp.ok) {
-          set.status = 502;
-          return { error: `Koios API returned ${resp.status}` };
-        }
-
-        const data = await resp.json() as Array<{
-          balance: string;
-          utxo_set: Array<{
-            value: string;
-            asset_list: Array<{
-              policy_id: string;
-              asset_name: string;
-              fingerprint: string;
-              quantity: string;
-            }>;
-          }>;
-        }>;
-
-        const addrInfo = data[0];
-        if (!addrInfo) {
-          // Address exists but has no UTXOs
-          return {
-            address: params.address,
-            network: config.networks.source.name,
-            assets: [{ unit: "lovelace", symbol: "ADA", quantity: "0" }],
-            lovelace: "0",
-          };
-        }
-
-        const totalLovelace = addrInfo.balance;
-        const assetMap = new Map<string, { symbol: string; quantity: bigint }>();
-
-        for (const utxo of addrInfo.utxo_set ?? []) {
-          for (const asset of utxo.asset_list ?? []) {
-            const unit = `${asset.policy_id}${asset.asset_name}`;
-            const existing = assetMap.get(unit);
-            // Decode hex asset name to UTF-8 for display
-            let symbol = asset.asset_name
-              ? Buffer.from(asset.asset_name, "hex").toString("utf8")
-              : asset.fingerprint?.slice(0, 12) ?? unit.slice(0, 12);
-            if (existing) {
-              assetMap.set(unit, { symbol: existing.symbol, quantity: existing.quantity + BigInt(asset.quantity) });
-            } else {
-              assetMap.set(unit, { symbol, quantity: BigInt(asset.quantity) });
-            }
-          }
-        }
-
-        const assets: ApiBalanceAsset[] = [
-          { unit: "lovelace", symbol: "ADA", quantity: totalLovelace },
-        ];
-
-        for (const [unit, { symbol, quantity }] of assetMap) {
-          assets.push({ unit, symbol, quantity: quantity.toString() });
-        }
-
-        return {
-          address: params.address,
-          network: config.networks.source.name,
-          assets,
-          lovelace: totalLovelace,
-        };
-      } catch (err) {
-        console.error("❌ Balance query failed:", err);
-        set.status = 502;
-        return {
-          error: err instanceof Error ? err.message : "Balance query failed",
-        };
-      }
-    })
-
-    // ── Test wallet routes (dev/test only) ───────────────────────
     .use(testWalletRoutes())
 
     .listen(port);

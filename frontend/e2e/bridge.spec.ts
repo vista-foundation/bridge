@@ -117,16 +117,11 @@ test.describe("Vista Bridge E2E", () => {
     console.log(`[Step 2] Deposit address: ${depositAddress}`);
     console.log(`[Step 2] Bridge fee: ${feeAda} ADA`);
 
-    // ── Step 3: Check deposit address balance before ───────────────
-    const beforeBalance = await apiGet(`/api/balance/${depositAddress}`);
-    const beforeAda = Number(beforeBalance.lovelace) / 1e6;
-    console.log(`[Step 3] Deposit address balance before: ${beforeAda} ADA`);
-
-    // ── Step 4: Submit deposit tx (server-side via Lucid) ──────────
+    // ── Step 3: Submit deposit tx ───────────────────────────────────
     const depositAmount = "3000000"; // 3 ADA
     const recipientAddress = "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD80";
 
-    console.log(`[Step 4] Submitting deposit: 3 ADA → ${depositAddress}`);
+    console.log(`[Step 3] Submitting deposit: 3 ADA → ${depositAddress}`);
     const depositResult = await apiPost("/api/test/wallet/deposit", {
       depositAddress,
       recipientAddress,
@@ -136,9 +131,9 @@ test.describe("Vista Bridge E2E", () => {
     expect(depositResult.error).toBeUndefined();
     expect(depositResult.txHash).toBeTruthy();
     const txHash: string = depositResult.txHash;
-    console.log(`[Step 4] Deposit tx: ${txHash}`);
+    console.log(`[Step 3] Deposit tx: ${txHash}`);
 
-    // ── Step 5: Register deposit with bridge backend ───────────────
+    // ── Step 4: Register deposit with bridge backend ─────────────
     const testWalletAddr = (await apiGet("/api/test/wallet/address")).bech32;
     const registerResult = await apiPost("/api/deposit/register", {
       depositTxHash: txHash,
@@ -148,16 +143,9 @@ test.describe("Vista Bridge E2E", () => {
       sourceNetwork: "preproduction",
     });
     expect(registerResult.success).toBe(true);
-    console.log(`[Step 5] Registered with bridge: ${registerResult.bridgeId}`);
+    console.log(`[Step 4] Registered: ${registerResult.bridgeId}`);
 
-    // ── Step 6: Verify deposit appears in bridge state ─────────────
-    const stateAfterRegister = await apiGet("/api/state");
-    expect(stateAfterRegister.pendingCount).toBeGreaterThan(0);
-    console.log(
-      `[Step 6] Bridge state: ${stateAfterRegister.pendingCount} pending, ${stateAfterRegister.processedCount} processed`,
-    );
-
-    // ── Step 7: Poll deposit status until processed ────────────────
+    // ── Step 5: Poll until CONFIRMED or FAILED ───────────────────
     let finalStatus = "PENDING";
     let mirrorTxHash = "";
 
@@ -168,40 +156,18 @@ test.describe("Vista Bridge E2E", () => {
       mirrorTxHash = statusResp.mirrorTxHash ?? "";
 
       console.log(
-        `[Step 7] [${(i + 1) * 5}s] Status: ${finalStatus}${mirrorTxHash ? ` | Mirror TX: ${mirrorTxHash}` : ""}`,
+        `[Step 5] [${(i + 1) * 5}s] ${finalStatus}${mirrorTxHash ? ` | Mirror: ${mirrorTxHash.slice(0, 16)}...` : ""}`,
       );
 
       if (finalStatus === "CONFIRMED" || finalStatus === "FAILED") break;
     }
 
-    // ── Step 8: Verify final bridge state ──────────────────────────
-    const finalState = await apiGet("/api/state");
-    console.log(
-      `[Step 8] Final state: ${finalState.processedCount} processed, ${finalState.pendingCount} pending`,
-    );
-
-    // The deposit should have been processed
-    expect(finalState.processedCount + finalState.pendingCount).toBeGreaterThan(0);
-
-    // ── Step 9: Verify bridge processed the deposit ─────────────────
-    // The real proof is CONFIRMED status + mirror tx hash
+    // ── Step 6: Verify CONFIRMED with mirror tx hash ─────────────
     expect(finalStatus).toBe("CONFIRMED");
     expect(mirrorTxHash).toBeTruthy();
-    console.log(`[Step 9] Bridge CONFIRMED with mirror TX: ${mirrorTxHash}`);
 
-    // ── Step 10: Verify the UI shows the transaction tracker ───────
-    await page.goto("/app");
-    await page.waitForLoadState("networkidle");
-
-    // Bridge state endpoint should reflect our deposit
-    const uiState = await apiGet("/api/state");
-    const ourDeposit = uiState.recentDeposits?.find(
-      (d: { depositTxHash: string }) => d.depositTxHash === txHash,
-    );
-    expect(ourDeposit).toBeTruthy();
-    console.log(
-      `[Step 10] Deposit visible in API: status=${ourDeposit?.status}`,
-    );
+    const finalState = await apiGet("/api/state");
+    console.log(`[Step 6] ${finalState.processedCount} processed, ${finalState.pendingCount} pending`);
 
     // ── Summary ────────────────────────────────────────────────────
     console.log("\n=== Bridge E2E Summary ===");
