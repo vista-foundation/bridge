@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+bun.lock
+
+# Build
+.next/
+dist/
+*.tsbuildinfo
+
+# Database
+*.db
+
+# Environment
+.env
+.env.local
+.env.test
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Test artifacts
+test-results/
+playwright-report/
+
+# OS
+.DS_Store
+Thumbs.db

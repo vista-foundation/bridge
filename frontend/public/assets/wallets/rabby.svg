@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none">
+  <rect width="40" height="40" rx="8" fill="#F5F5F5"/>
+  <defs>
+    <linearGradient id="rabby" x1="10" y1="10" x2="30" y2="30" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8697FF"/>
+      <stop offset="1" stop-color="#ABB7FF"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="20" cy="20" rx="10" ry="10" fill="url(#rabby)"/>
+  <ellipse cx="16" cy="17" rx="2" ry="2.5" fill="#fff"/>
+  <ellipse cx="24" cy="17" rx="2" ry="2.5" fill="#fff"/>
+  <circle cx="16" cy="17.5" r="1" fill="#333"/>
+  <circle cx="24" cy="17.5" r="1" fill="#333"/>
+  <path d="M13 13c-1-3 3-5 7-5s8 2 7 5" stroke="#fff" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+  <path d="M15 23q5 4 10 0" stroke="#fff" stroke-width="1" fill="none" stroke-linecap="round"/>
+</svg>

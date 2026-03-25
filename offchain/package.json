@@ -1,0 +1,55 @@
+{
+  "name": "vista-bridge-offchain",
+  "version": "1.0.0",
+  "description": "VISTA Protocol - Cardano bridge between networks using UTXORPC and Effect-TS",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "bun run src/main.ts",
+    "test": "vitest",
+    "test:unit": "vitest src/tests/unit",
+    "test:api": "bun test src/tests/unit/api.test.ts",
+    "test:all": "vitest run && bun test src/tests/unit/api.test.ts",
+    "test:integration": "vitest src/tests/integration",
+    "clean": "rm -rf dist",
+    "start": "node dist/main.js",
+    "start:indexer": "node dist/indexer/index.js",
+    "start:relayer": "node dist/relayer/index.js",
+    "start:mirror": "node dist/mirror/index.js",
+    "test-auth": "tsx scripts/test-auth.ts",
+    "generate-wallet": "tsx scripts/generate-wallet.ts"
+  },
+  "keywords": [
+    "cardano",
+    "bridge",
+    "utxorpc",
+    "effect-ts"
+  ],
+  "author": "Agrow Labs",
+  "license": "CC-BY-SA-4.0",
+  "dependencies": {
+    "@effect/platform": "^0.87.1",
+    "@effect/platform-node": "^0.88.3",
+    "@elysiajs/cors": "^1.2.0",
+    "@sinclair/typebox": "^0.34.0",
+    "@lucid-evolution/lucid": "^0.4.29",
+    "@types/sqlite3": "^5.1.0",
+    "@utxorpc/sdk": "^0.6.7",
+    "@utxorpc/spec": "^0.16.0",
+    "@vista-bridge/shared": "workspace:*",
+    "dotenv": "^17.0.0",
+    "effect": "^3.16.10",
+    "bech32": "^2.0.0",
+    "elysia": "^1.2.0",
+    "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "@effect/vitest": "^0.23.10",
+    "@types/node": "^24.0.7",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

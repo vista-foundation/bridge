@@ -1,0 +1,5 @@
+{
+  "name": "vista-bridge",
+  "private": true,
+  "workspaces": ["frontend", "offchain", "packages/*"]
+}
