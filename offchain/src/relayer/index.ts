@@ -16,8 +16,8 @@ export class Relayer extends Context.Tag("Relayer")<Relayer, {
   readonly publishDeposit: (event: DepositEvent) => Effect.Effect<{ success: boolean; messageId: string }, RelayerError>;
   readonly subscribeToDeposits: Stream.Stream<DepositEvent, RelayerError>;
   readonly updateMirrorStatus: (depositTxHash: string, mirrorTxHash: string, status: string, errorMessage?: string) => Effect.Effect<boolean, RelayerError>;
-  readonly getBridgeState: () => Effect.Effect<BridgeState, RelayerError>;
-  readonly getPendingDeposits: () => Effect.Effect<DepositEvent[], RelayerError>;
+  readonly getBridgeState: (routeId?: string) => Effect.Effect<BridgeState, RelayerError>;
+  readonly getPendingDeposits: (routeId?: string) => Effect.Effect<DepositEvent[], RelayerError>;
   readonly getPendingDepositsForRetry: (maxRetries?: number) => Effect.Effect<DepositEvent[], RelayerError>;
   readonly cleanupOldDeposits: (maxAgeMs?: number) => Effect.Effect<number, RelayerError>;
   readonly persistState: () => Effect.Effect<void, RelayerError>;
@@ -133,16 +133,16 @@ const makeRelayerService = (): Effect.Effect<Context.Tag.Service<Relayer>, Relay
           }
         }),
 
-      getBridgeState: () =>
+      getBridgeState: (routeId?: string) =>
         Effect.tryPromise({
-          try: () => database.loadBridgeState(),
+          try: () => database.loadBridgeState(routeId),
           catch: (error) => new RelayerError(`Failed to get bridge state: ${error}`, error),
         }),
 
-      getPendingDeposits: () =>
+      getPendingDeposits: (routeId?: string) =>
         Effect.gen(function* () {
           const bridgeState = yield* Effect.tryPromise({
-            try: () => database.loadBridgeState(),
+            try: () => database.loadBridgeState(routeId),
             catch: (error) => new RelayerError(`Failed to load bridge state: ${error}`, error),
           });
           return bridgeState.pendingMirrors.map(pm => pm.deposit);

@@ -190,7 +190,7 @@ export const UtxorpcLive = Layer.effect(
 );
 
 // Helper: Convert Bech32 Cardano address to raw bytes
-const addressToBytes = (addressBech32: string): Uint8Array => {
+export const addressToBytes = (addressBech32: string): Uint8Array => {
   try {
     console.log(`🔄 Converting address to bytes: ${addressBech32}`);
 
@@ -218,7 +218,7 @@ const addressToBytes = (addressBech32: string): Uint8Array => {
 };
 
 // Helper: Extract deposit information from a transaction
-const extractDepositsFromTx = async (tx: cardano.Tx, watchedAddress: string): Promise<DepositEvent[]> => {
+export const extractDepositsFromTx = async (tx: cardano.Tx, watchedAddress: string): Promise<DepositEvent[]> => {
   const deposits: DepositEvent[] = [];
 
   try {

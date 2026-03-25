@@ -1,125 +1,135 @@
-import { Effect, Context, Layer, Stream } from "effect";
+import { Effect, Stream } from "effect";
+import { CardanoWatchClient } from "@utxorpc/sdk";
+import type { IChainIndexer } from "../common/chain-interfaces.js";
+import type { BridgeRoute } from "../common/route.js";
 import type { DepositEvent } from "../common/types.js";
 import { IndexerError } from "../common/types.js";
-import { Utxorpc } from "../common/utxorpc.js";
-import { Relayer } from "../relayer/index.js";
-import { Config } from "../common/config.js";
+import { addressToBytes, extractDepositsFromTx } from "../common/utxorpc.js";
 
-// Define an Indexer Service using Context.Tag
-export class Indexer extends Context.Tag("Indexer")<Indexer, {
-  readonly run: Effect.Effect<never, IndexerError>;
-}>() {}
+// Minimal relayer interface needed by the indexer
+interface RelayerService {
+  publishDeposit: (event: DepositEvent) => Effect.Effect<{ success: boolean; messageId: string }, Error>;
+}
 
-// Indexer service implementation
-const makeIndexerService = (
-  config: Context.Tag.Service<Config>,
-  utxorpc: Context.Tag.Service<Utxorpc>,
-  relayer: Context.Tag.Service<Relayer>
-): Effect.Effect<Context.Tag.Service<Indexer>, IndexerError> =>
-  Effect.gen(function* () {
-    const processedDeposits = new Set<string>();
+/**
+ * Cardano-specific chain indexer.
+ * Watches deposit addresses via UTXORPC and publishes DepositEvents to the relayer.
+ */
+export class CardanoIndexer implements IChainIndexer {
+  readonly chainId: string;
+
+  constructor(
+    private readonly route: BridgeRoute,
+    private readonly relayer: RelayerService,
+  ) {
+    this.chainId = route.source.chainId;
+  }
+
+  get run(): Effect.Effect<never, Error> {
+    const { route, relayer } = this;
+    const processedTxHashes = new Set<string>();
 
     const validateDeposit = (deposit: DepositEvent): Effect.Effect<void, IndexerError> =>
       Effect.gen(function* () {
-        const minAmount = BigInt(config.bridge.minDepositAmount);
-        const maxAmount = BigInt(config.bridge.maxTransferAmount);
+        const minAmount = BigInt(route.bridge.minDepositAmount);
+        const maxAmount = BigInt(route.bridge.maxTransferAmount);
 
         if (deposit.amount < minAmount) {
-          yield* Effect.fail(new IndexerError(`Deposit amount ${deposit.amount} below minimum ${minAmount}`));
+          return yield* Effect.fail(new IndexerError(`Amount ${deposit.amount} below min ${minAmount}`));
         }
-
         if (deposit.amount > maxAmount) {
-          yield* Effect.fail(new IndexerError(`Deposit amount ${deposit.amount} above maximum ${maxAmount}`));
+          return yield* Effect.fail(new IndexerError(`Amount ${deposit.amount} above max ${maxAmount}`));
         }
-
-        if (!config.bridge.allowedAssets.includes(deposit.assetType)) {
-          yield* Effect.fail(new IndexerError(`Asset type ${deposit.assetType} not allowed`));
+        if (!route.bridge.allowedAssets.includes(deposit.assetType)) {
+          return yield* Effect.fail(new IndexerError(`Asset ${deposit.assetType} not allowed`));
         }
       });
 
     const processDeposit = (deposit: DepositEvent): Effect.Effect<void, IndexerError> =>
       Effect.gen(function* () {
-        // Check if already processed
-        if (processedDeposits.has(deposit.transactionHash)) {
-          return;
-        }
+        if (processedTxHashes.has(deposit.transactionHash)) return;
 
-        console.log(`💰 Indexer: Found deposit ${deposit.transactionHash} - ${deposit.amount} lovelace`);
+        // Tag with route ID
+        deposit.routeId = route.id;
 
-        // Validate deposit
+        console.log(`💰 Indexer [${route.id}]: Deposit ${deposit.transactionHash} — ${deposit.amount} lovelace`);
         yield* validateDeposit(deposit);
 
-        // Mark as processed
-        processedDeposits.add(deposit.transactionHash);
+        processedTxHashes.add(deposit.transactionHash);
 
-        // Publish to relayer
         const result = yield* relayer.publishDeposit(deposit).pipe(
-          Effect.mapError((error) => new IndexerError(`Failed to publish deposit: ${error.message}`, error))
+          Effect.mapError((e) => new IndexerError(`Publish failed: ${e.message}`, e)),
         );
-        
+
         if (result.success) {
-          console.log(`✅ Indexer: Processed deposit ${deposit.transactionHash}`);
+          console.log(`✅ Indexer [${route.id}]: Published ${deposit.transactionHash}`);
         } else {
-          yield* Effect.fail(new IndexerError(`Failed to publish deposit ${deposit.transactionHash}`));
+          return yield* Effect.fail(new IndexerError(`Publish failed for ${deposit.transactionHash}`));
         }
       });
 
-    const watchAddresses = Effect.gen(function* () {
-      const depositAddresses = config.networks.source.depositAddresses || [];
-      
+    return Effect.gen(function* () {
+      const depositAddresses = route.source.addresses;
       if (depositAddresses.length === 0) {
-        yield* Effect.fail(new IndexerError("No deposit addresses configured"));
+        return yield* Effect.fail(new IndexerError(`No deposit addresses for route ${route.id}`));
       }
 
-      console.log(`🔍 Watching ${depositAddresses.length} addresses on ${config.networks.source.utxorpcEndpoint}`);
-      
-      // Watch addresses using UTXORPC and process deposits
-      const depositStream = utxorpc.watchAddresses(depositAddresses);
-      
+      // Create UTXORPC watch client for source chain
+      const headers: Record<string, string> = {};
+      if (route.source.utxorpcApiKey) {
+        headers["dmtr-api-key"] = route.source.utxorpcApiKey;
+      }
+
+      const watchClient = new CardanoWatchClient({
+        uri: route.source.utxorpcEndpoint!,
+        ...(Object.keys(headers).length > 0 && { headers }),
+      });
+
+      console.log(`👀 Indexer [${route.id}]: Watching ${depositAddresses.length} addresses on ${route.source.utxorpcEndpoint}`);
+
+      // Watch addresses and process deposits
+      const depositStream = Stream.async<DepositEvent, IndexerError>((emit) => {
+        for (const address of depositAddresses) {
+          const addrBytes = addressToBytes(address);
+
+          (async () => {
+            try {
+              const txEvents = watchClient.watchTxForAddress(addrBytes);
+              for await (const event of txEvents) {
+                if (event.action === "apply" && event.Tx) {
+                  const deposits = await extractDepositsFromTx(event.Tx, address);
+                  for (const dep of deposits) {
+                    dep.routeId = route.id;
+                    emit.single(dep);
+                  }
+                }
+              }
+            } catch (error) {
+              const msg = error instanceof Error ? error.message : String(error);
+              console.error(`❌ Indexer [${route.id}]: Stream error for ${address}:`, msg);
+              emit.fail(new IndexerError(`Watch stream failed: ${msg}`, error));
+            }
+          })();
+        }
+
+        return Effect.sync(() => {
+          console.log(`🔌 Indexer [${route.id}]: Closing watch streams`);
+        });
+      });
+
       yield* depositStream.pipe(
         Stream.mapEffect(processDeposit),
-        Stream.catchAll((error) => 
+        Stream.catchAll((error) =>
           Effect.gen(function* () {
-            console.error("❌ Error watching addresses:", error);
-            console.log("⚠️ UTXORPC stream failed. This could be due to:");
-            console.log("  1. Network connectivity issues");
-            console.log("  2. Invalid API credentials");
-            console.log("  3. Endpoint configuration problems");
-            console.log("  4. Service unavailability");
-            console.log("🔄 Retrying connection in 30 seconds...");
-            
-            // Wait before retrying
+            console.error(`❌ Indexer [${route.id}]: Stream failed, retrying in 30s...`);
             yield* Effect.sleep("30 seconds");
-            
-            // Re-throw the error to trigger retry
-            return Effect.fail(new IndexerError(`UTXORPC stream error: ${error.message}`));
-          })
+            return Effect.fail(new IndexerError(`Stream error: ${error.message}`));
+          }),
         ),
-        Stream.runDrain
+        Stream.runDrain,
       );
-    });
 
-    return {
-      run: Effect.gen(function* () {
-        console.log("👀 Indexer: Starting to watch for deposits...");
-        
-        yield* watchAddresses.pipe(
-          Effect.catchAll((error) => {
-            console.error("❌ Critical indexer error:", error);
-            return Effect.fail(new IndexerError(`Indexer failed: ${error}`));
-          })
-        );
-        
-        // This should never be reached as watchAddresses runs forever
-        yield* Effect.never;
-      }) as Effect.Effect<never, IndexerError>
-    };
-  });
-
-// Create a Layer that provides the Indexer service
-export const IndexerLive = Layer.effect(
-  Indexer,
-  Effect.all([Config, Utxorpc, Relayer]).pipe(
-    Effect.flatMap(([config, utxorpc, relayer]) => makeIndexerService(config, utxorpc, relayer))
-  )
-); 
+      yield* Effect.never;
+    }) as Effect.Effect<never, Error>;
+  }
+}
