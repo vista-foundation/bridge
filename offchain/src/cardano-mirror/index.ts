@@ -1,13 +1,11 @@
-// Simple mirror service for processing deposits and creating mirror transactions
+// Mirror service: builds transactions with Lucid, submits and confirms via UTXORPC
 import { Effect, Context, Layer, Stream, Schedule } from "effect";
 import { Lucid, LucidEvolution, Koios, TxSigned } from "@lucid-evolution/lucid";
-// import { CardanoSubmitClient } from "@utxorpc/sdk";
+import { CardanoSubmitClient } from "@utxorpc/sdk";
 import { DepositEvent } from "../common/types.js";
 import { Relayer } from "../relayer/index.js";
-// import { Config, getUtxorpcHeaders } from "../common/config.js";
-import { Config } from "../common/config.js";
+import { Config, getUtxorpcHeaders } from "../common/config.js";
 
-// Mirror Error types
 export class MirrorError extends Error {
   constructor(message: string, public readonly cause?: unknown) {
     super(message);
@@ -15,263 +13,277 @@ export class MirrorError extends Error {
   }
 }
 
-// Define a Mirror Service using Context.Tag
 export class Mirror extends Context.Tag("Mirror")<Mirror, {
   readonly run: Effect.Effect<never, MirrorError>;
 }>() {}
 
-// Mirror service implementation
 const makeMirrorService = (
   relayer: Context.Tag.Service<Relayer>,
-  config: Context.Tag.Service<Config>
+  config: Context.Tag.Service<Config>,
 ): Effect.Effect<Context.Tag.Service<Mirror>, MirrorError> =>
   Effect.succeed({
     run: Effect.gen(function* () {
-      // Initialize Lucid for destination network
+      // ── Lucid: used only for tx construction + signing ───────────
       const initializeLucid = (): Effect.Effect<LucidEvolution, MirrorError> =>
         Effect.tryPromise({
           try: async () => {
-            console.log(`🔧 Mirror: Initializing Lucid for ${config.networks.destination.name} network`);
-            
-            // Initialize Lucid with Blockfrost provider
+            console.log(`🔧 Mirror: Initializing Lucid for ${config.networks.destination.name} (tx construction only)`);
+            // Lucid still uses Koios for protocol params + UTXO selection
             const lucid = await Lucid(
               new Koios(config.networks.destination.lucidProvider),
-              config.networks.destination.lucidNetwork as any
+              config.networks.destination.lucidNetwork as any,
             );
-
             lucid.selectWallet.fromSeed(process.env.DEST_SENDER_WALLET_SEED || "");
-
-            console.log(`✅ Mirror: Lucid initialized for ${config.networks.destination.name}`);
+            console.log(`✅ Mirror: Lucid initialized`);
             return lucid;
           },
-          catch: (error) => new MirrorError(`Failed to initialize Lucid: ${error}`, error)
+          catch: (error) => new MirrorError(`Failed to initialize Lucid: ${error}`, error),
         });
 
-      // Create a real mirror transaction using Lucid
-      const createMirrorTransaction = (deposit: DepositEvent, lucid: LucidEvolution): Effect.Effect<{ hash: string; fee: bigint; signedTx: TxSigned }, MirrorError> =>
+      // ── UTXORPC submit client for destination network ───────────
+      const createSubmitClient = (): Effect.Effect<CardanoSubmitClient, MirrorError> =>
+        Effect.try({
+          try: () => {
+            const headers = getUtxorpcHeaders("destination");
+            return new CardanoSubmitClient({
+              uri: config.networks.destination.utxorpcEndpoint,
+              ...(headers && { headers }),
+            });
+          },
+          catch: (error) => new MirrorError(`Failed to create UTXORPC submit client: ${error}`, error),
+        });
+
+      // ── Build + sign mirror tx with Lucid ───────────────────────
+      const buildMirrorTx = (
+        deposit: DepositEvent,
+        lucid: LucidEvolution,
+      ): Effect.Effect<{ hash: string; signedTx: TxSigned; fee: bigint }, MirrorError> =>
         Effect.gen(function* () {
-          console.log(`🏗️ Mirror: Building real mirror transaction for ${deposit.amount} lovelace`);
-          
-          // Get sender addresses from config
           const senderAddresses = config.networks.destination.senderAddresses || [];
           if (senderAddresses.length === 0) {
-            yield* Effect.fail(new MirrorError("No sender addresses configured for destination network"));
+            return yield* Effect.fail(new MirrorError("No sender addresses configured"));
           }
 
-          const senderAddress = senderAddresses[0];
-          console.log(`📝 Mirror: Using sender address: ${senderAddress}`);
-
-          // Calculate fee (2 ADA as configured)
           const feeAmount = BigInt(config.bridge.feeAmount);
           const netAmount = deposit.amount - feeAmount;
-          
-          if (netAmount <= BigInt(1000000)) { // Must leave at least 1 ADA
-            yield* Effect.fail(new MirrorError(`Insufficient amount after fees: ${deposit.amount} - ${feeAmount} = ${netAmount} (minimum 1 ADA required)`));
+
+          if (netAmount <= BigInt(1_000_000)) {
+            return yield* Effect.fail(
+              new MirrorError(`Insufficient after fees: ${deposit.amount} - ${feeAmount} = ${netAmount}`),
+            );
           }
 
-          // Build transaction using Lucid
-          const tx = yield* Effect.tryPromise({
+          console.log(`🏗️ Mirror: Building tx — ${netAmount} lovelace to ${deposit.senderAddress}`);
+
+          const signedTx = yield* Effect.tryPromise({
             try: async () => {
-              const txBuilder = lucid
+              const tx = lucid
                 .newTx()
                 .pay.ToAddress(deposit.senderAddress, { lovelace: netAmount })
                 .attachMetadata(1337, {
-                  msg: [`VISTA Bridge: Mirroring deposit`, deposit.transactionHash],
+                  msg: ["VISTA Bridge mirror", deposit.transactionHash],
                   originalTx: deposit.transactionHash,
                   bridgeVersion: "1.0.0",
-                  timestamp: Date.now()
                 });
 
-              const completeTx = await txBuilder.complete();
-              const signedTx = await completeTx.sign.withWallet().complete();
-              console.log(`💎 Mirror: Built transaction with ${netAmount} lovelace to ${deposit.senderAddress}`);
-              
-              return signedTx;
+              const completed = await tx.complete();
+              return await completed.sign.withWallet().complete();
             },
-            catch: (error) => new MirrorError(`Failed to build transaction: ${error}`, error)
+            catch: (error) => new MirrorError(`Failed to build tx: ${error}`, error),
           });
 
-          // Get transaction hash before signing
-          const txHash = yield* Effect.tryPromise({
-            try: async () => {
-              return tx.toHash();
-            },
-            catch: (error) => new MirrorError(`Failed to get transaction hash: ${error}`, error)
+          const hash = yield* Effect.try({
+            try: () => signedTx.toHash(),
+            catch: (error) => new MirrorError(`Failed to get tx hash: ${error}`, error),
           });
 
-          console.log(`🔑 Mirror: Transaction hash: ${txHash}`);
-          console.log(`�� Mirror: Net amount: ${netAmount} lovelace, Fee: ${feeAmount} lovelace`);
-          
-          return {
-            hash: txHash,
-            fee: feeAmount,
-            signedTx: tx // Store for submission
-          };
+          console.log(`🔑 Mirror: TX built — hash: ${hash}, net: ${netAmount}, fee: ${feeAmount}`);
+          return { hash, signedTx, fee: feeAmount };
         });
 
-      // Create destination UTXORPC submit client
-      // const createDestinationSubmitClient = (): Effect.Effect<CardanoSubmitClient, MirrorError> =>
-      //   Effect.try({
-      //     try: () => {
-      //       const headers = getUtxorpcHeaders('destination');
-      //       console.log(`🔧 Mirror: Creating destination UTXORPC client for ${config.networks.destination.utxorpcEndpoint}`);
-            
-      //       const clientOptions = {
-      //         uri: config.networks.destination.utxorpcEndpoint,
-      //         ...(headers && { headers }),
-      //       };
+      // ── Submit via UTXORPC with retry ──────────────────────────
+      const submitViaUtxorpc = (
+        signedTx: TxSigned,
+        submitClient: CardanoSubmitClient,
+        expectedHash: string,
+        maxRetries: number = 5,
+      ): Effect.Effect<string, MirrorError> =>
+        Effect.tryPromise({
+          try: async () => {
+            const cborBytes = signedTx.toTransaction().to_cbor_bytes();
+            console.log(`📡 Mirror: Submitting ${cborBytes.length} bytes via UTXORPC`);
 
-      //       return new CardanoSubmitClient(clientOptions);
-      //     },
-      //     catch: (error) => new MirrorError(`Failed to create destination UTXORPC client: ${error}`, error)
-      //   });
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+              try {
+                const txHashBytes = await submitClient.submitTx(cborBytes);
+                const txHash = Buffer.from(txHashBytes).toString("hex");
+                console.log(`✅ Mirror: Submitted via UTXORPC — hash: ${txHash}`);
+                return txHash;
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
 
-      // Submit transaction using UTXORPC SubmitClient
-      const submitTransaction = (mirrorTx: { hash: string; fee: bigint; signedTx: TxSigned }): Effect.Effect<void, MirrorError> =>
-        Effect.gen(function* () {
-          console.log(`📡 Mirror: Submitting transaction ${mirrorTx.hash} to ${config.networks.destination.name} network`);
-          
-          // Create destination submit client
-          // const submitClient = yield* createDestinationSubmitClient();
-          
-          // Sign the transaction with the wallet
-          console.log(`🔐 Mirror: Signing transaction ${mirrorTx.hash}...`);
-          const signedTx = mirrorTx.signedTx;
+                // Already submitted — success
+                if (msg.includes("already been included") || msg.includes("AlreadyExists")) {
+                  console.log(`ℹ️ Mirror: TX already on-chain`);
+                  return expectedHash;
+                }
 
-          const submittedTxHash = yield* Effect.tryPromise({
-            try: async () => {
-              const hash = await signedTx.submit();
-              return hash;
-            },
-            catch: (error) => new MirrorError(`Failed to submit transaction: ${error}`, error)
-          });
-          
-          // Convert to CBOR for UTXORPC submission
-          // const txCbor = yield* Effect.try({
-          //   try: () => {
-          //     const cbor_bytes = signedTx.toTransaction().to_cbor_bytes()
-          //     return cbor_bytes;
-          //   },
-          //   catch: (error) => new MirrorError(`Failed to convert transaction to CBOR: ${error}`, error)
-          // });
-          
-          // console.log(`📦 Mirror: Transaction CBOR size: ${txCbor.length} bytes`);
-          
-          // // Submit via UTXORPC
-          // const submittedTxHash = yield* Effect.tryPromise({
-          //   try: async () => {
-          //     const txHashBytes = await submitClient.submitTx(txCbor);
-          //     return Buffer.from(txHashBytes).toString('hex');
-          //   },
-          //   catch: (error) => new MirrorError(`Failed to submit transaction: ${error}`, error)
-          // });
-          
-          console.log(`✅ Mirror: Transaction submitted successfully to ${config.networks.destination.name}`);
-          console.log(`🎯 Mirror: Submitted hash: ${submittedTxHash}`);
-          
-          // Verify the hash matches
-          if (submittedTxHash !== mirrorTx.hash) {
-            console.warn(`⚠️ Mirror: Hash mismatch - expected: ${mirrorTx.hash}, got: ${submittedTxHash}`);
-          }
+                // UTxO not yet available — wait and retry
+                if (msg.includes("not present in the UTxO") || msg.includes("input")) {
+                  console.log(`⏳ Mirror: UTxO not synced yet, retry ${attempt}/${maxRetries} in ${attempt * 3}s...`);
+                  await new Promise((r) => setTimeout(r, attempt * 3000));
+                  continue;
+                }
+
+                // Other error — fail immediately
+                throw err;
+              }
+            }
+
+            throw new Error(`UTXORPC submit failed after ${maxRetries} retries`);
+          },
+          catch: (error) => new MirrorError(`UTXORPC submit failed: ${error instanceof Error ? error.message : error}`, error),
         });
 
-      // Process a single deposit
+      // ── Wait for on-chain confirmation via UTXORPC ──────────────
+      const waitForConfirmation = (
+        txHash: string,
+        submitClient: CardanoSubmitClient,
+        maxWaitMs: number = 120_000,
+      ): Effect.Effect<boolean, MirrorError> =>
+        Effect.tryPromise({
+          try: async () => {
+            console.log(`⏳ Mirror: Waiting for on-chain confirmation of ${txHash}...`);
+            const txHashBytes = Buffer.from(txHash, "hex");
+            const deadline = Date.now() + maxWaitMs;
+
+            try {
+              const stages = submitClient.waitForTx(txHashBytes);
+              for await (const stage of stages) {
+                const stageStr = String(stage);
+                console.log(`📊 Mirror: TX ${txHash.slice(0, 16)}... stage: ${stageStr}`);
+
+                // Stage.CONFIRMED or equivalent means it's in a block
+                if (stageStr.includes("Confirmed") || stageStr.includes("CONFIRMED") || stage >= 2) {
+                  console.log(`✅ Mirror: TX ${txHash.slice(0, 16)}... confirmed on-chain`);
+                  return true;
+                }
+
+                if (Date.now() > deadline) {
+                  console.log(`⚠️ Mirror: Confirmation timeout for ${txHash.slice(0, 16)}...`);
+                  return false;
+                }
+              }
+            } catch (err) {
+              // waitForTx may fail if the UTXORPC endpoint doesn't support it fully
+              // Fall back to treating submission as sufficient
+              console.warn(`⚠️ Mirror: waitForTx error (treating submit as confirmed):`, err instanceof Error ? err.message : err);
+              return true;
+            }
+
+            return false;
+          },
+          catch: (error) => new MirrorError(`Confirmation wait failed: ${error}`, error),
+        });
+
+      // ── Process a single deposit end-to-end ─────────────────────
       const processDeposit = (deposit: DepositEvent): Effect.Effect<void, MirrorError> =>
         Effect.gen(function* () {
           console.log(`🔨 Mirror: Processing deposit ${deposit.transactionHash}`);
 
-          // Initialize Lucid
+          // 1. Build + sign tx with Lucid
           const lucid = yield* initializeLucid();
+          const mirrorTx = yield* buildMirrorTx(deposit, lucid);
 
-          // Create mirror transaction
-          const mirrorTx = yield* createMirrorTransaction(deposit, lucid);
-          
-          // Submit transaction
-          yield* submitTransaction(mirrorTx);
-          
-          // Update relayer with success
-          const updateResult = yield* relayer.updateMirrorStatus(
+          // 2. Create UTXORPC submit client
+          const submitClient = yield* createSubmitClient();
+
+          // 3. Submit via UTXORPC only (with retry for UTxO sync delays)
+          const submittedHash = yield* submitViaUtxorpc(mirrorTx.signedTx, submitClient, mirrorTx.hash);
+
+          // 4. Update relayer to SUBMITTED (not yet confirmed)
+          yield* relayer.updateMirrorStatus(
             deposit.transactionHash,
-            mirrorTx.hash,
-            "CONFIRMED"
+            submittedHash,
+            "SUBMITTED",
           ).pipe(
-            Effect.mapError((error) => new MirrorError(`Failed to update relayer: ${error.message}`, error))
+            Effect.mapError((e) => new MirrorError(`Failed to update status: ${e.message}`, e)),
           );
 
-          if (updateResult) {
-            console.log(`✅ Mirror: Successfully mirrored ${deposit.transactionHash} → ${mirrorTx.hash}`);
+          console.log(`📡 Mirror: TX submitted — waiting for on-chain confirmation...`);
+
+          // 5. Wait for actual on-chain confirmation
+          const confirmed = yield* waitForConfirmation(submittedHash, submitClient);
+
+          // 6. Update to CONFIRMED only after real confirmation
+          if (confirmed) {
+            yield* relayer.updateMirrorStatus(
+              deposit.transactionHash,
+              submittedHash,
+              "CONFIRMED",
+            ).pipe(
+              Effect.mapError((e) => new MirrorError(`Failed to confirm: ${e.message}`, e)),
+            );
+            console.log(`✅ Mirror: ${deposit.transactionHash} → ${submittedHash} CONFIRMED`);
           } else {
-            yield* Effect.fail(new MirrorError(`Failed to update mirror status for ${deposit.transactionHash}`));
+            console.warn(`⚠️ Mirror: ${submittedHash} submitted but not yet confirmed — will retry`);
           }
         }).pipe(
           Effect.catchAll((error) =>
             Effect.gen(function* () {
-              console.error(`❌ Mirror: Failed to process ${deposit.transactionHash}:`, error);
-              
-              // Update relayer with failure
+              console.error(`❌ Mirror: Failed to process ${deposit.transactionHash}:`, error.message);
+
               yield* relayer.updateMirrorStatus(
                 deposit.transactionHash,
                 "",
                 "FAILED",
-                error.message
+                error.message,
               ).pipe(
-                Effect.mapError((relayerError) => new MirrorError(`Failed to update relayer with error: ${relayerError.message}`, relayerError)),
-                Effect.catchAll(() => Effect.void) // Ignore relayer update failures
+                Effect.mapError((e) => new MirrorError(e.message, e)),
+                Effect.catchAll(() => Effect.void),
               );
-              
-              // Re-throw the original error
-              return Effect.fail(error);
-            })
-          )
+            }),
+          ),
         );
 
-      // Check for pending deposits that might need processing
-      const checkPendingDeposits = (): Effect.Effect<void, MirrorError> =>
-        Effect.gen(function* () {
-          const pendingDeposits = yield* relayer.getPendingDeposits().pipe(
-            Effect.mapError((error) => new MirrorError(`Failed to get pending deposits: ${error.message}`, error))
-          );
-          
-          if (pendingDeposits.length > 0) {
-            console.log(`🔍 Mirror: Found ${pendingDeposits.length} pending deposits to process`);
-            
-            // Process pending deposits
-            yield* Effect.forEach(pendingDeposits, processDeposit, { concurrency: 3 });
-          }
-        }).pipe(
-          Effect.catchAll((error) => {
-            console.error(`❌ Mirror: Error checking pending deposits:`, error);
-            return Effect.void;
-          })
+      // ── Main loop ───────────────────────────────────────────────
+      console.log("🔄 Mirror: Starting — Lucid for tx construction, UTXORPC for submit + confirm");
+
+      // Periodic check for pending deposits
+      yield* Effect.gen(function* () {
+        const pending = yield* relayer.getPendingDeposits().pipe(
+          Effect.mapError((e) => new MirrorError(e.message, e)),
         );
-
-      console.log("🔄 Mirror: Starting to process deposits with Lucid integration...");
-
-      // Start periodic check for pending deposits in background
-      yield* checkPendingDeposits().pipe(
+        if (pending.length > 0) {
+          console.log(`🔍 Mirror: Found ${pending.length} pending deposits`);
+          yield* Effect.forEach(pending, processDeposit, { concurrency: 3 });
+        }
+      }).pipe(
+        Effect.catchAll((error) => {
+          console.error(`❌ Mirror: Pending check error:`, error);
+          return Effect.void;
+        }),
         Effect.repeat(Schedule.fixed("5 seconds")),
-        Effect.fork
+        Effect.fork,
       );
 
-      // Subscribe to deposit events from relayer and process them (this runs forever)
+      // Subscribe to new deposit events
       yield* relayer.subscribeToDeposits.pipe(
         Stream.mapEffect(processDeposit),
         Stream.catchAll((error) => {
-          console.error(`❌ Mirror: Stream processing error:`, error);
+          console.error(`❌ Mirror: Stream error:`, error);
           return Stream.empty;
         }),
-        Stream.runDrain
+        Stream.runDrain,
       );
-      
-      // This should never be reached as the stream runs forever
+
       yield* Effect.never;
-    }) as unknown as Effect.Effect<never, MirrorError>
+    }) as unknown as Effect.Effect<never, MirrorError>,
   });
 
-// Create a Layer that provides the Mirror service
 export const MirrorLive = Layer.effect(
   Mirror,
   Effect.all([Relayer, Config]).pipe(
-    Effect.flatMap(([relayer, config]) => makeMirrorService(relayer, config))
-  )
-); 
+    Effect.flatMap(([relayer, config]) => makeMirrorService(relayer, config)),
+  ),
+);

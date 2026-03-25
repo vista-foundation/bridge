@@ -6,9 +6,12 @@
 import { Elysia, t } from "elysia";
 import { Lucid, Koios } from "@lucid-evolution/lucid";
 import dotenv from "dotenv";
+import { fileURLToPath } from "url";
+import path from "path";
 
-// Load test wallet credentials
-dotenv.config({ path: ".env.test" });
+// Load test wallet credentials (resolve path relative to this file)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, "../../.env.test") });
 
 const SEED = process.env.E2E_WALLET_SEED ?? "";
 const PROVIDER_URL = process.env.SOURCE_LUCID_PROVIDER ?? "https://preprod.koios.rest/api/v1";
@@ -23,7 +26,8 @@ async function getLucid() {
   if (!_lucid) {
     _lucid = await Lucid(new Koios(PROVIDER_URL), NETWORK);
     _lucid.selectWallet.fromSeed(SEED);
-    console.log("🧪 Test wallet initialized");
+    const addr = await _lucid.wallet().address();
+    console.log(`🧪 Test wallet initialized: ${addr} (seed words: ${SEED.split(" ").length})`);
   }
   return _lucid;
 }
