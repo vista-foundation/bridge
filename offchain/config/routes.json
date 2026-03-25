@@ -1,0 +1,68 @@
+{
+  "routes": [
+    {
+      "id": "preprod-to-preview",
+      "source": {
+        "chainId": "cardano-preprod",
+        "chainType": "cardano",
+        "name": "preproduction",
+        "utxorpcEndpoint": "https://cardano-preprod.utxorpc-m1.demeter.run",
+        "lucidProvider": "https://preprod.koios.rest/api/v1",
+        "lucidNetwork": "Preprod",
+        "addresses": ["addr_test1qpnueplse6f4d55eumh7f3tzp3wx882xk7qs6ydxtynrfsw89vzfjf0v4yca056el40n7pr568rdls6lp6eu0dwek9nqku88yp"]
+      },
+      "destination": {
+        "chainId": "cardano-preview",
+        "chainType": "cardano",
+        "name": "preview",
+        "utxorpcEndpoint": "https://cardano-preview.utxorpc-m1.demeter.run",
+        "lucidProvider": "https://preview.koios.rest/api/v1",
+        "lucidNetwork": "Preview",
+        "addresses": ["addr_test1qpg5fj3gsmt673lpxlpzhum6mrw2z0hyk3u455swep39zdt6yr3r556e70k6uvrj8jyey6jwnaeamenujatxuqs50ljq2mq4xl"]
+      },
+      "bridge": {
+        "allowedAssets": ["ADA"],
+        "minDepositAmount": "2000000",
+        "maxTransferAmount": "100000000000",
+        "feeAmount": "1000000"
+      },
+      "security": {
+        "requiredConfirmations": 5,
+        "retryAttempts": 5,
+        "retryDelayMs": 5000
+      }
+    },
+    {
+      "id": "preview-to-preprod",
+      "source": {
+        "chainId": "cardano-preview",
+        "chainType": "cardano",
+        "name": "preview",
+        "utxorpcEndpoint": "https://cardano-preview.utxorpc-m1.demeter.run",
+        "lucidProvider": "https://preview.koios.rest/api/v1",
+        "lucidNetwork": "Preview",
+        "addresses": ["addr_test1qqjyy85rrrdh2z50w3klhavs046qencsudrvsafwnu8n3gsuvuwc6zrwnda5hgeqxkak3tamzu8km2pxs8lj4jwyzq8qax6vf8"]
+      },
+      "destination": {
+        "chainId": "cardano-preprod",
+        "chainType": "cardano",
+        "name": "preproduction",
+        "utxorpcEndpoint": "https://cardano-preprod.utxorpc-m1.demeter.run",
+        "lucidProvider": "https://preprod.koios.rest/api/v1",
+        "lucidNetwork": "Preprod",
+        "addresses": ["addr_test1qrdxa6yv5k3r5u3af4hxtxy9gwcj59t6gv4mnv2um65qe6xyyqacnw8uxknfgdvkfnku8dvrk9ll4nuz7yd4kqr7thfse7v2p6"]
+      },
+      "bridge": {
+        "allowedAssets": ["ADA"],
+        "minDepositAmount": "2000000",
+        "maxTransferAmount": "100000000000",
+        "feeAmount": "1000000"
+      },
+      "security": {
+        "requiredConfirmations": 5,
+        "retryAttempts": 5,
+        "retryDelayMs": 5000
+      }
+    }
+  ]
+}

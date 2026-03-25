@@ -1,5 +1,7 @@
 import { Effect, Context, Layer } from "effect";
 import dotenv from "dotenv";
+import { readFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { BridgeConfig } from "./types.js";
 import type { BridgeRoute } from "./route.js";
 
@@ -29,9 +31,66 @@ const getEnvInt = (key: string, defaultValue: number): number => {
   return isNaN(parsed) ? defaultValue : parsed;
 };
 
+// Load routes from JSON file and overlay secrets from env vars
+function loadRoutesFromFile(filePath: string): BridgeRoute[] {
+  const absPath = resolve(filePath);
+  if (!existsSync(absPath)) {
+    throw new Error(`Routes file not found: ${absPath}`);
+  }
+  const content = readFileSync(absPath, "utf-8");
+  const data = JSON.parse(content) as { routes: BridgeRoute[] };
+
+  // Overlay secrets from env vars: ROUTE_<ID>_SOURCE_API_KEY, ROUTE_<ID>_DEST_API_KEY, ROUTE_<ID>_DEST_WALLET_SEED
+  for (const route of data.routes) {
+    const envPrefix = `ROUTE_${route.id.toUpperCase().replace(/-/g, "_")}`;
+    route.source.utxorpcApiKey = route.source.utxorpcApiKey ?? process.env[`${envPrefix}_SOURCE_API_KEY`] ?? process.env.SOURCE_UTXORPC_API_KEY;
+    route.destination.utxorpcApiKey = route.destination.utxorpcApiKey ?? process.env[`${envPrefix}_DEST_API_KEY`] ?? process.env.DEST_UTXORPC_API_KEY;
+    route.destination.walletSeed = route.destination.walletSeed ?? process.env[`${envPrefix}_DEST_WALLET_SEED`];
+  }
+
+  return data.routes;
+}
+
 // Load configuration from environment variables as an Effect
 export const loadConfigFromEnv = Effect.try({
   try: (): BridgeConfig => {
+    // Check for routes JSON file first
+    const routesFile = process.env.BRIDGE_ROUTES_FILE;
+    if (routesFile) {
+      console.log(`📄 Loading routes from ${routesFile}`);
+      const routes = loadRoutesFromFile(routesFile);
+      const first = routes[0];
+      const config: BridgeConfig = {
+        routes,
+        networks: {
+          source: {
+            name: first.source.name,
+            utxorpcEndpoint: first.source.utxorpcEndpoint ?? "",
+            lucidProvider: first.source.lucidProvider ?? "",
+            lucidNetwork: first.source.lucidNetwork ?? "",
+            depositAddresses: first.source.addresses,
+          },
+          destination: {
+            name: first.destination.name,
+            utxorpcEndpoint: first.destination.utxorpcEndpoint ?? "",
+            lucidProvider: first.destination.lucidProvider ?? "",
+            lucidNetwork: first.destination.lucidNetwork ?? "",
+            senderAddresses: first.destination.addresses,
+          },
+        },
+        bridge: first.bridge,
+        security: first.security,
+        grpc: {
+          indexerPort: getEnvInt("GRPC_INDEXER_PORT", 50051),
+          relayerPort: getEnvInt("GRPC_RELAYER_PORT", 50052),
+          mirrorPort: getEnvInt("GRPC_MIRROR_PORT", 50053),
+        },
+        api: { port: getEnvInt("API_PORT", 3001) },
+      };
+      validateConfig(config);
+      return config;
+    }
+
     // Build legacy source/destination config from env vars
     const sourceNetwork = {
       name: getEnv('SOURCE_NETWORK_NAME', 'preproduction'),
