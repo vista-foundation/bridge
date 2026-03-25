@@ -74,4 +74,25 @@ describe("Config Validation", () => {
     config.networks.destination.utxorpcEndpoint = "ftp://invalid";
     expect(() => validateConfig(config)).toThrow("valid HTTP");
   });
+
+  // ── Routes ─────────────────────────────────────────────────────
+
+  it("mockBridgeConfig includes a routes array", () => {
+    const config = mockBridgeConfig();
+    expect(config.routes).toBeInstanceOf(Array);
+    expect(config.routes.length).toBeGreaterThan(0);
+  });
+
+  it("default route has valid structure", () => {
+    const config = mockBridgeConfig();
+    const route = config.routes[0];
+    expect(route.id).toBeTruthy();
+    expect(route.source.chainId).toMatch(/^cardano-/);
+    expect(route.source.chainType).toBe("cardano");
+    expect(route.destination.chainId).toMatch(/^cardano-/);
+    expect(route.destination.chainType).toBe("cardano");
+    expect(route.source.addresses.length).toBeGreaterThan(0);
+    expect(route.destination.addresses.length).toBeGreaterThan(0);
+    expect(BigInt(route.bridge.feeAmount)).toBeGreaterThan(0n);
+  });
 });

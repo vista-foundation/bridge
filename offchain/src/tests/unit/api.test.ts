@@ -95,6 +95,28 @@ describe("API Server", () => {
     });
   });
 
+  // ── GET /api/routes ─────────────────────────────────────────────
+
+  describe("GET /api/routes", () => {
+    it("returns configured bridge routes", async () => {
+      const res = await fetch(`${BASE}/api/routes`);
+      expect(res.status).toBe(200);
+
+      const body = await res.json();
+      expect(body.routes).toBeInstanceOf(Array);
+      expect(body.routes.length).toBeGreaterThan(0);
+
+      const route = body.routes[0];
+      expect(route.id).toBeTruthy();
+      expect(route.sourceNetwork).toBe("preproduction");
+      expect(route.destinationNetwork).toBe("preview");
+      expect(route.sourceChainId).toBe("cardano-preprod");
+      expect(route.destinationChainId).toBe("cardano-preview");
+      expect(route.depositAddresses).toBeInstanceOf(Array);
+      expect(route.feeAmount).toBeTruthy();
+    });
+  });
+
   // ── GET /api/state ───────────────────────────────────────────────
 
   describe("GET /api/state", () => {

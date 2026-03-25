@@ -163,4 +163,43 @@ describe("DatabaseService", () => {
       BigInt("1700000000000"),
     );
   });
+
+  // ── Route ID filtering ───────────────────────────────────────
+
+  it("stores and retrieves routeId on processed deposits", async () => {
+    await db.addProcessedDeposit(
+      mockProcessedDeposit({ routeId: "route-a", transactionHash: "tx_a_001" }),
+    );
+    await db.addProcessedDeposit(
+      mockProcessedDeposit({ routeId: "route-b", transactionHash: "tx_b_001" }),
+    );
+
+    const all = await db.loadBridgeState();
+    expect(all.processedDeposits).toHaveLength(2);
+
+    const routeA = await db.loadBridgeState("route-a");
+    expect(routeA.processedDeposits).toHaveLength(1);
+    expect(routeA.processedDeposits[0].routeId).toBe("route-a");
+
+    const routeB = await db.loadBridgeState("route-b");
+    expect(routeB.processedDeposits).toHaveLength(1);
+    expect(routeB.processedDeposits[0].routeId).toBe("route-b");
+  });
+
+  it("stores and filters pending mirrors by routeId", async () => {
+    await db.addPendingMirror(
+      mockPendingMirror({ routeId: "route-a", depositTxHash: "pending_a" }),
+    );
+    await db.addPendingMirror(
+      mockPendingMirror({ routeId: "route-b", depositTxHash: "pending_b" }),
+    );
+
+    const routeA = await db.loadBridgeState("route-a");
+    expect(routeA.pendingMirrors).toHaveLength(1);
+    expect(routeA.pendingMirrors[0].routeId).toBe("route-a");
+
+    const none = await db.loadBridgeState("nonexistent");
+    expect(none.pendingMirrors).toHaveLength(0);
+    expect(none.processedDeposits).toHaveLength(0);
+  });
 });
