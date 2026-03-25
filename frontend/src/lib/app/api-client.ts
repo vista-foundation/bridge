@@ -1,5 +1,6 @@
 import type {
   ApiBridgeConfig,
+  ApiBridgeRoutesResponse,
   ApiBridgeState,
   ApiDepositStatus,
   ApiHealthResponse,
@@ -34,6 +35,8 @@ export const bridgeApi = {
   getHealth: () => apiGet<ApiHealthResponse>("/api/health"),
 
   getConfig: () => apiGet<ApiBridgeConfig>("/api/config"),
+
+  getRoutes: () => apiGet<ApiBridgeRoutesResponse>("/api/routes"),
 
   getState: () => apiGet<ApiBridgeState>("/api/state"),
 

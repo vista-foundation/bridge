@@ -56,6 +56,8 @@ export interface ApiRegisterDepositRequest {
   /** Amount in lovelace (as string) */
   amount: string;
   sourceNetwork: string;
+  /** Route ID for multi-route bridges (optional, defaults to first route) */
+  routeId?: string;
 }
 
 export interface ApiRegisterDepositResponse {
@@ -67,6 +69,26 @@ export interface ApiRegisterDepositResponse {
 export interface ApiErrorResponse {
   error: string;
   message: string;
+}
+
+// ── Bridge routes ──────────────────────────────────────────────────────
+
+export interface ApiBridgeRoute {
+  id: string;
+  sourceNetwork: string;
+  sourceChainId: string;
+  destinationNetwork: string;
+  destinationChainId: string;
+  depositAddresses: string[];
+  allowedAssets: string[];
+  minDepositAmount: string;
+  maxTransferAmount: string;
+  feeAmount: string;
+  requiredConfirmations: number;
+}
+
+export interface ApiBridgeRoutesResponse {
+  routes: ApiBridgeRoute[];
 }
 
 export interface ApiBalanceAsset {

@@ -5,6 +5,8 @@ import type { BridgeConfig, DepositEvent, MirrorStatus } from "../common/types.j
 import { testWalletRoutes } from "./test-wallet.js";
 import type {
   ApiBridgeConfig,
+  ApiBridgeRoute,
+  ApiBridgeRoutesResponse,
   ApiBridgeState,
   ApiDepositStatus,
   ApiHealthResponse,
@@ -88,6 +90,23 @@ export function createApiServer(
 
     // ── Bridge configuration ───────────────────────────────────────
     .get("/api/config", () => toBridgeConfig(config))
+
+    // ── Bridge routes ──────────────────────────────────────────────
+    .get("/api/routes", (): ApiBridgeRoutesResponse => ({
+      routes: config.routes.map((r): ApiBridgeRoute => ({
+        id: r.id,
+        sourceNetwork: r.source.name,
+        sourceChainId: r.source.chainId,
+        destinationNetwork: r.destination.name,
+        destinationChainId: r.destination.chainId,
+        depositAddresses: r.source.addresses,
+        allowedAssets: r.bridge.allowedAssets,
+        minDepositAmount: r.bridge.minDepositAmount,
+        maxTransferAmount: r.bridge.maxTransferAmount,
+        feeAmount: r.bridge.feeAmount,
+        requiredConfirmations: r.security.requiredConfirmations,
+      })),
+    }))
 
     // ── Bridge state ───────────────────────────────────────────────
     .get("/api/state", async (): Promise<ApiBridgeState> => {
