@@ -153,8 +153,10 @@ export function testWalletRoutes() {
 
           const tx = new Transaction({ initiator: wallet });
           tx.sendLovelace(body.depositAddress, body.amount);
+          // Cardano metadata has 64-byte max per string — chunk long addresses
+          const dest = body.recipientAddress;
           tx.setMetadata(1337, {
-            d: body.recipientAddress,
+            d: dest.length > 64 ? [dest.slice(0, 64), dest.slice(64)] : dest,
             v: "1.0.0",
           });
 

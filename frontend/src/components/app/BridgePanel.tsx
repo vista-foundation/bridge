@@ -285,9 +285,12 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
         // Build deposit transaction
         const tx = new Transaction({ initiator: wallet });
         tx.sendLovelace(depositAddress, lovelace);
+        // Cardano metadata: 64-byte max per string — chunk long addresses
         tx.setMetadata(1337, {
-          d: receiverAddress, // destination address
-          v: "1.0.0",        // bridge version
+          d: receiverAddress.length > 64
+            ? [receiverAddress.slice(0, 64), receiverAddress.slice(64)]
+            : receiverAddress,
+          v: "1.0.0",
         });
 
         const unsignedTx = await tx.build();
