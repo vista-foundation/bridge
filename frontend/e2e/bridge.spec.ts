@@ -30,14 +30,16 @@ async function runBridgeFlow(opts: {
   recipientAddress: string;
   amount: string;
   sourceNetwork: string;
+  network: string; // "preprod" or "preview" — which chain the deposit tx goes to
   label: string;
 }) {
   // Submit deposit via test wallet
-  console.log(`[${opts.label}] Submitting deposit: ${Number(opts.amount) / 1e6} ADA → ${opts.depositAddress.slice(0, 20)}...`);
+  console.log(`[${opts.label}] Submitting deposit: ${Number(opts.amount) / 1e6} ADA → ${opts.depositAddress.slice(0, 20)}... (${opts.network})`);
   const depositResult = await apiPost("/api/test/wallet/deposit", {
     depositAddress: opts.depositAddress,
     recipientAddress: opts.recipientAddress,
     amount: opts.amount,
+    network: opts.network,
   });
 
   if (depositResult.error) {
@@ -166,6 +168,7 @@ test.describe("Vista Bridge E2E", () => {
       recipientAddress: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD80",
       amount: "3000000",
       sourceNetwork: "preproduction",
+      network: "preprod",
       label: "Preprod→Preview",
     });
 
@@ -203,6 +206,7 @@ test.describe("Vista Bridge E2E", () => {
       recipientAddress: "addr_test1qpnueplse6f4d55eumh7f3tzp3wx882xk7qs6ydxtynrfsw89vzfjf0v4yca056el40n7pr568rdls6lp6eu0dwek9nqku88yp",
       amount: "3000000",
       sourceNetwork: "preview",
+      network: "preview",
       label: "Preview→Preprod",
     });
 

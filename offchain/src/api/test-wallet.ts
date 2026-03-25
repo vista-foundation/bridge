@@ -131,29 +131,39 @@ export function testWalletRoutes() {
     )
 
     // ── Build, sign, and submit a deposit tx server-side ──────────
-    // This bypasses the browser-side Mesh Transaction builder entirely.
+    // Supports both Preprod and Preview via the `network` parameter.
     // Used by E2E tests to make real on-chain deposits.
     .post(
       "/deposit",
       async ({ body }) => {
-        const lucid = await getLucid();
         try {
-          const lovelace = BigInt(body.amount);
+          const { MeshWallet, Transaction, KoiosProvider } = await import("@meshsdk/core");
 
-          const tx = await lucid
-            .newTx()
-            .pay.ToAddress(body.depositAddress, { lovelace })
-            .attachMetadata(1337, {
-              d: body.recipientAddress,
-              v: "1.0.0",
-            })
-            .complete();
+          // Determine network from the deposit address or explicit param
+          const network = body.network ?? "preprod";
+          const koiosSlug = network === "preview" ? "preview" : "preprod";
 
-          const signedTx = await tx.sign.withWallet().complete();
-          const txHash = await signedTx.submit();
+          const provider = new KoiosProvider(koiosSlug);
+          const wallet = new MeshWallet({
+            networkId: 0,
+            fetcher: provider as any,
+            submitter: provider as any,
+            key: { type: "mnemonic", words: SEED.split(" ") },
+          });
 
-          console.log(`🧪 Test deposit submitted: ${txHash}`);
-          console.log(`   ${Number(lovelace) / 1e6} ADA → ${body.depositAddress}`);
+          const tx = new Transaction({ initiator: wallet });
+          tx.sendLovelace(body.depositAddress, body.amount);
+          tx.setMetadata(1337, {
+            d: body.recipientAddress,
+            v: "1.0.0",
+          });
+
+          const unsignedTx = await tx.build();
+          const signedTx = await wallet.signTx(unsignedTx);
+          const txHash = await wallet.submitTx(signedTx);
+
+          console.log(`🧪 Test deposit (${network}): ${txHash}`);
+          console.log(`   ${Number(body.amount) / 1e6} ADA → ${body.depositAddress.slice(0, 30)}...`);
 
           return { txHash, amount: body.amount };
         } catch (err) {
@@ -166,7 +176,8 @@ export function testWalletRoutes() {
         body: t.Object({
           depositAddress: t.String(),
           recipientAddress: t.String(),
-          amount: t.String(), // lovelace
+          amount: t.String(),
+          network: t.Optional(t.String()),
         }),
       },
     );
