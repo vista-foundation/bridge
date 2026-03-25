@@ -62,7 +62,23 @@ export class DatabaseService {
       )
     `);
 
+    // Migrate: add route_id column if missing
+    await this.migrateRouteId();
+
     console.log('✅ Database: Tables initialized successfully');
+  }
+
+  private async migrateRouteId(): Promise<void> {
+    const columns = await this.dbAll(`PRAGMA table_info(processed_deposits)`);
+    const hasRouteId = columns.some((c: { name: string }) => c.name === 'route_id');
+    if (hasRouteId) return;
+
+    console.log('💾 Database: Migrating — adding route_id column...');
+    await this.dbRun(`ALTER TABLE processed_deposits ADD COLUMN route_id TEXT NOT NULL DEFAULT 'default'`);
+    await this.dbRun(`ALTER TABLE pending_mirrors ADD COLUMN route_id TEXT NOT NULL DEFAULT 'default'`);
+    await this.dbRun(`CREATE UNIQUE INDEX IF NOT EXISTS idx_pd_route_tx ON processed_deposits(route_id, transaction_hash)`);
+    await this.dbRun(`CREATE UNIQUE INDEX IF NOT EXISTS idx_pm_route_tx ON pending_mirrors(route_id, deposit_tx_hash)`);
+    console.log('✅ Database: Migration complete');
   }
 
   async saveBridgeState(state: BridgeState): Promise<void> {
@@ -70,10 +86,11 @@ export class DatabaseService {
       // Save processed deposits
       for (const deposit of state.processedDeposits) {
         await this.dbRun(`
-          INSERT OR REPLACE INTO processed_deposits 
-          (transaction_hash, processed_at, mirror_tx_hash, status) 
-          VALUES (?, ?, ?, ?)
+          INSERT OR REPLACE INTO processed_deposits
+          (route_id, transaction_hash, processed_at, mirror_tx_hash, status)
+          VALUES (?, ?, ?, ?, ?)
         `, [
+          deposit.routeId ?? 'default',
           deposit.transactionHash,
           Number(deposit.processedAt),
           deposit.mirrorTxHash,
@@ -84,10 +101,11 @@ export class DatabaseService {
       // Save pending mirrors
       for (const pending of state.pendingMirrors) {
         await this.dbRun(`
-          INSERT OR REPLACE INTO pending_mirrors 
-          (deposit_tx_hash, deposit_data, retry_count, last_retry_at, error_message) 
-          VALUES (?, ?, ?, ?, ?)
+          INSERT OR REPLACE INTO pending_mirrors
+          (route_id, deposit_tx_hash, deposit_data, retry_count, last_retry_at, error_message)
+          VALUES (?, ?, ?, ?, ?, ?)
         `, [
+          pending.routeId ?? 'default',
           pending.depositTxHash,
           serializeWithBigInt(pending.deposit),
           pending.retryCount,
@@ -111,17 +129,21 @@ export class DatabaseService {
     }
   }
 
-  async loadBridgeState(): Promise<BridgeState> {
+  async loadBridgeState(routeId?: string): Promise<BridgeState> {
     try {
       console.log('📖 Database: Loading bridge state from database...');
 
-      // Load processed deposits
-      const processedRows = await this.dbAll(`
-        SELECT transaction_hash, processed_at, mirror_tx_hash, status 
-        FROM processed_deposits
-      `);
+      const routeFilter = routeId ? ` WHERE route_id = ?` : '';
+      const routeParams = routeId ? [routeId] : [];
 
-      const processedDeposits: ProcessedDeposit[] = processedRows.map(row => ({
+      // Load processed deposits
+      const processedRows = await this.dbAll(
+        `SELECT route_id, transaction_hash, processed_at, mirror_tx_hash, status FROM processed_deposits${routeFilter}`,
+        routeParams,
+      );
+
+      const processedDeposits: ProcessedDeposit[] = processedRows.map((row: any) => ({
+        routeId: row.route_id ?? 'default',
         transactionHash: row.transaction_hash,
         processedAt: BigInt(row.processed_at),
         mirrorTxHash: row.mirror_tx_hash,
@@ -129,12 +151,13 @@ export class DatabaseService {
       }));
 
       // Load pending mirrors
-      const pendingRows = await this.dbAll(`
-        SELECT deposit_tx_hash, deposit_data, retry_count, last_retry_at, error_message 
-        FROM pending_mirrors
-      `);
+      const pendingRows = await this.dbAll(
+        `SELECT route_id, deposit_tx_hash, deposit_data, retry_count, last_retry_at, error_message FROM pending_mirrors${routeFilter}`,
+        routeParams,
+      );
 
-      const pendingMirrors: PendingMirror[] = pendingRows.map(row => ({
+      const pendingMirrors: PendingMirror[] = pendingRows.map((row: any) => ({
+        routeId: row.route_id ?? 'default',
         depositTxHash: row.deposit_tx_hash,
         deposit: deserializeWithBigInt(row.deposit_data) as DepositEvent,
         retryCount: row.retry_count,
@@ -175,10 +198,11 @@ export class DatabaseService {
 
   async addProcessedDeposit(deposit: ProcessedDeposit): Promise<void> {
     await this.dbRun(`
-      INSERT OR REPLACE INTO processed_deposits 
-      (transaction_hash, processed_at, mirror_tx_hash, status) 
-      VALUES (?, ?, ?, ?)
+      INSERT OR REPLACE INTO processed_deposits
+      (route_id, transaction_hash, processed_at, mirror_tx_hash, status)
+      VALUES (?, ?, ?, ?, ?)
     `, [
+      deposit.routeId ?? 'default',
       deposit.transactionHash,
       Number(deposit.processedAt),
       deposit.mirrorTxHash,
@@ -188,10 +212,11 @@ export class DatabaseService {
 
   async addPendingMirror(pending: PendingMirror): Promise<void> {
     await this.dbRun(`
-      INSERT OR REPLACE INTO pending_mirrors 
-      (deposit_tx_hash, deposit_data, retry_count, last_retry_at, error_message) 
-      VALUES (?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO pending_mirrors
+      (route_id, deposit_tx_hash, deposit_data, retry_count, last_retry_at, error_message)
+      VALUES (?, ?, ?, ?, ?, ?)
     `, [
+      pending.routeId ?? 'default',
       pending.depositTxHash,
       serializeWithBigInt(pending.deposit),
       pending.retryCount,
@@ -208,7 +233,7 @@ export class DatabaseService {
 
   async updatePendingMirror(depositTxHash: string, retryCount: number, errorMessage?: string): Promise<void> {
     await this.dbRun(`
-      UPDATE pending_mirrors 
+      UPDATE pending_mirrors
       SET retry_count = ?, last_retry_at = ?, error_message = ?
       WHERE deposit_tx_hash = ?
     `, [retryCount, Date.now(), errorMessage || null, depositTxHash]);
