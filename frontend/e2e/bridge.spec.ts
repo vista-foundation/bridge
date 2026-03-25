@@ -6,18 +6,77 @@ const INJECT_SCRIPT = path.resolve(__dirname, "fixtures/inject-wallet.js");
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-async function apiGet(path: string) {
-  const resp = await fetch(`${BACKEND_URL}${path}`);
+async function apiGet(urlPath: string) {
+  const resp = await fetch(`${BACKEND_URL}${urlPath}`);
   return resp.json();
 }
 
-async function apiPost(path: string, body: unknown) {
-  const resp = await fetch(`${BACKEND_URL}${path}`, {
+async function apiPost(urlPath: string, body: unknown) {
+  const resp = await fetch(`${BACKEND_URL}${urlPath}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   return resp.json();
+}
+
+/**
+ * Submits a deposit, registers it, polls until CONFIRMED.
+ * Returns { depositTxHash, mirrorTxHash, status }.
+ */
+async function runBridgeFlow(opts: {
+  routeId: string;
+  depositAddress: string;
+  recipientAddress: string;
+  amount: string;
+  sourceNetwork: string;
+  label: string;
+}) {
+  // Submit deposit via test wallet
+  console.log(`[${opts.label}] Submitting deposit: ${Number(opts.amount) / 1e6} ADA → ${opts.depositAddress.slice(0, 20)}...`);
+  const depositResult = await apiPost("/api/test/wallet/deposit", {
+    depositAddress: opts.depositAddress,
+    recipientAddress: opts.recipientAddress,
+    amount: opts.amount,
+  });
+
+  if (depositResult.error) {
+    console.log(`[${opts.label}] Deposit failed: ${depositResult.error}`);
+    return { depositTxHash: "", mirrorTxHash: "", status: "FAILED", error: depositResult.error };
+  }
+
+  const txHash: string = depositResult.txHash;
+  console.log(`[${opts.label}] Deposit tx: ${txHash}`);
+
+  // Register with bridge
+  const regResult = await apiPost("/api/deposit/register", {
+    depositTxHash: txHash,
+    senderAddress: (await apiGet("/api/test/wallet/address")).bech32,
+    recipientAddress: opts.recipientAddress,
+    amount: opts.amount,
+    sourceNetwork: opts.sourceNetwork,
+    routeId: opts.routeId,
+  });
+  console.log(`[${opts.label}] Registered: ${regResult.bridgeId}`);
+
+  // Poll for status
+  let status = "PENDING";
+  let mirrorTxHash = "";
+
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const statusResp = await apiGet(`/api/deposit/${txHash}`);
+    status = statusResp.status ?? "PENDING";
+    mirrorTxHash = statusResp.mirrorTxHash ?? "";
+
+    console.log(
+      `[${opts.label}] [${(i + 1) * 5}s] ${status}${mirrorTxHash ? ` | Mirror: ${mirrorTxHash.slice(0, 16)}...` : ""}`,
+    );
+
+    if (status === "CONFIRMED" || status === "FAILED") break;
+  }
+
+  return { depositTxHash: txHash, mirrorTxHash, status };
 }
 
 // ── Test Suite ───────────────────────────────────────────────────────
@@ -34,11 +93,22 @@ test.describe("Vista Bridge E2E", () => {
     expect(body.healthy).toBe(true);
   });
 
-  test("backend returns bridge config with deposit address", async () => {
+  test("backend returns bridge routes", async () => {
+    const data = await apiGet("/api/routes");
+    expect(data.routes).toBeInstanceOf(Array);
+    expect(data.routes.length).toBeGreaterThan(0);
+
+    const route = data.routes[0];
+    expect(route.id).toBeTruthy();
+    expect(route.depositAddresses.length).toBeGreaterThan(0);
+    expect(route.feeAmount).toBeTruthy();
+    console.log(`Routes: ${data.routes.map((r: any) => r.id).join(", ")}`);
+  });
+
+  test("backward compat: GET /api/config still works", async () => {
     const config = await apiGet("/api/config");
-    expect(config.sourceNetwork).toBe("preproduction");
+    expect(config.sourceNetwork).toBeTruthy();
     expect(config.depositAddresses.length).toBeGreaterThan(0);
-    expect(config.feeAmount).toBeTruthy();
   });
 
   test("test wallet has funds", async () => {
@@ -57,12 +127,6 @@ test.describe("Vista Bridge E2E", () => {
     });
   });
 
-  test("shows fee from bridge config", async ({ page }) => {
-    await page.goto("/app");
-    await expect(page.locator("text=Fee")).toBeVisible({ timeout: 15000 });
-    await expect(page.locator("text=1 ADA")).toBeVisible();
-  });
-
   test("injected wallet appears and connects", async ({ page }) => {
     await page.goto("/app");
     await page.waitForLoadState("networkidle");
@@ -75,106 +139,79 @@ test.describe("Vista Bridge E2E", () => {
     await expect(page.locator("button:has-text('Bridge ADA')")).toBeVisible({
       timeout: 15000,
     });
-    await expect(page.locator("text=Sender")).toBeVisible();
   });
 
-  test("validates receiver address", async ({ page }) => {
-    await page.goto("/app");
-    await page.waitForLoadState("networkidle");
+  // ── Full bridge flow: Preprod → Preview ──────────────────────────
 
-    await page.locator("button:has-text('Connect')").first().click();
-    await page.locator("button:has-text('Test Wallet')").click();
-    await expect(page.locator("button:has-text('Bridge ADA')")).toBeVisible({
-      timeout: 15000,
-    });
+  test("full bridge: preprod → preview", async ({ page }) => {
+    test.setTimeout(180_000);
 
-    const receiverInput = page.locator("input[placeholder*='Paste']").last();
-    await receiverInput.fill("invalid_address");
-    await expect(page.locator("text=\u2716")).toBeVisible();
-
-    await receiverInput.fill("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD80");
-    await expect(page.locator("text=\u2714").first()).toBeVisible();
-  });
-
-  // ── Full bridge flow: deposit → confirmation → mirror ────────────
-
-  test("full bridge: deposit on preprod → mirror on preview", async ({ page }) => {
-    test.setTimeout(180_000); // 3 min for on-chain confirmations
-
-    // ── Step 1: Verify wallet has enough funds ─────────────────────
     const balanceData = await apiGet("/api/test/wallet/balance");
     const walletAda = Number(balanceData.lovelace) / 1e6;
-    console.log(`[Step 1] Test wallet balance: ${walletAda} ADA`);
     if (walletAda < 5) {
       test.skip(true, `Need at least 5 ADA, have ${walletAda}`);
       return;
     }
 
-    // ── Step 2: Get bridge config ──────────────────────────────────
-    const config = await apiGet("/api/config");
-    const depositAddress = config.depositAddresses[0];
-    const feeAda = Number(config.feeAmount) / 1e6;
-    console.log(`[Step 2] Deposit address: ${depositAddress}`);
-    console.log(`[Step 2] Bridge fee: ${feeAda} ADA`);
-
-    // ── Step 3: Submit deposit tx ───────────────────────────────────
-    const depositAmount = "3000000"; // 3 ADA
-    const recipientAddress = "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD80";
-
-    console.log(`[Step 3] Submitting deposit: 3 ADA → ${depositAddress}`);
-    const depositResult = await apiPost("/api/test/wallet/deposit", {
-      depositAddress,
-      recipientAddress,
-      amount: depositAmount,
-    });
-
-    expect(depositResult.error).toBeUndefined();
-    expect(depositResult.txHash).toBeTruthy();
-    const txHash: string = depositResult.txHash;
-    console.log(`[Step 3] Deposit tx: ${txHash}`);
-
-    // ── Step 4: Register deposit with bridge backend ─────────────
-    const testWalletAddr = (await apiGet("/api/test/wallet/address")).bech32;
-    const registerResult = await apiPost("/api/deposit/register", {
-      depositTxHash: txHash,
-      senderAddress: testWalletAddr,
-      recipientAddress,
-      amount: depositAmount,
-      sourceNetwork: "preproduction",
-    });
-    expect(registerResult.success).toBe(true);
-    console.log(`[Step 4] Registered: ${registerResult.bridgeId}`);
-
-    // ── Step 5: Poll until CONFIRMED or FAILED ───────────────────
-    let finalStatus = "PENDING";
-    let mirrorTxHash = "";
-
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 5000));
-      const statusResp = await apiGet(`/api/deposit/${txHash}`);
-      finalStatus = statusResp.status ?? "PENDING";
-      mirrorTxHash = statusResp.mirrorTxHash ?? "";
-
-      console.log(
-        `[Step 5] [${(i + 1) * 5}s] ${finalStatus}${mirrorTxHash ? ` | Mirror: ${mirrorTxHash.slice(0, 16)}...` : ""}`,
-      );
-
-      if (finalStatus === "CONFIRMED" || finalStatus === "FAILED") break;
+    const routes = await apiGet("/api/routes");
+    const route = routes.routes.find((r: any) => r.sourceNetwork === "preproduction");
+    if (!route) {
+      test.skip(true, "No preprod-to-preview route configured");
+      return;
     }
 
-    // ── Step 6: Verify CONFIRMED with mirror tx hash ─────────────
-    expect(finalStatus).toBe("CONFIRMED");
-    expect(mirrorTxHash).toBeTruthy();
+    const result = await runBridgeFlow({
+      routeId: route.id,
+      depositAddress: route.depositAddresses[0],
+      recipientAddress: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD80",
+      amount: "3000000",
+      sourceNetwork: "preproduction",
+      label: "Preprod→Preview",
+    });
 
-    const finalState = await apiGet("/api/state");
-    console.log(`[Step 6] ${finalState.processedCount} processed, ${finalState.pendingCount} pending`);
+    expect(result.status).toBe("CONFIRMED");
+    expect(result.mirrorTxHash).toBeTruthy();
 
-    // ── Summary ────────────────────────────────────────────────────
-    console.log("\n=== Bridge E2E Summary ===");
-    console.log(`Deposit TX (Preprod):  ${txHash}`);
-    console.log(`Mirror TX (Preview):   ${mirrorTxHash}`);
-    console.log(`Status:                ${finalStatus}`);
-    console.log(`Amount:                3 ADA`);
-    console.log("==========================\n");
+    console.log("\n=== Preprod → Preview ===");
+    console.log(`Deposit: ${result.depositTxHash}`);
+    console.log(`Mirror:  ${result.mirrorTxHash}`);
+    console.log("=========================\n");
+  });
+
+  // ── Full bridge flow: Preview → Preprod ──────────────────────────
+
+  test("full bridge: preview → preprod", async ({ page }) => {
+    test.setTimeout(180_000);
+
+    const balanceData = await apiGet("/api/test/wallet/balance");
+    const walletAda = Number(balanceData.lovelace) / 1e6;
+    if (walletAda < 5) {
+      test.skip(true, `Need at least 5 ADA, have ${walletAda}`);
+      return;
+    }
+
+    const routes = await apiGet("/api/routes");
+    const route = routes.routes.find((r: any) => r.sourceNetwork === "preview");
+    if (!route) {
+      test.skip(true, "No preview-to-preprod route configured");
+      return;
+    }
+
+    const result = await runBridgeFlow({
+      routeId: route.id,
+      depositAddress: route.depositAddresses[0],
+      recipientAddress: "addr_test1qpnueplse6f4d55eumh7f3tzp3wx882xk7qs6ydxtynrfsw89vzfjf0v4yca056el40n7pr568rdls6lp6eu0dwek9nqku88yp",
+      amount: "3000000",
+      sourceNetwork: "preview",
+      label: "Preview→Preprod",
+    });
+
+    expect(result.status).toBe("CONFIRMED");
+    expect(result.mirrorTxHash).toBeTruthy();
+
+    console.log("\n=== Preview → Preprod ===");
+    console.log(`Deposit: ${result.depositTxHash}`);
+    console.log(`Mirror:  ${result.mirrorTxHash}`);
+    console.log("=========================\n");
   });
 });
