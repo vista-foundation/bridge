@@ -52,6 +52,7 @@ const makeRelayerService = (): Effect.Effect<Context.Tag.Service<Relayer>, Relay
           
           // Store as pending mirror in database
           const pendingMirror: PendingMirror = {
+            routeId: event.routeId,
             depositTxHash: event.transactionHash,
             deposit: event,
             retryCount: 0,
@@ -80,7 +81,15 @@ const makeRelayerService = (): Effect.Effect<Context.Tag.Service<Relayer>, Relay
         Effect.gen(function* () {
           try {
             if (status === "CONFIRMED") {
+              // Find the route from the pending mirror
+              const bridgeState = yield* Effect.tryPromise({
+                try: () => database.loadBridgeState(),
+                catch: (error) => new RelayerError(`Failed to load bridge state: ${error}`, error),
+              });
+              const pendingRoute = bridgeState.pendingMirrors.find(p => p.depositTxHash === depositTxHash)?.routeId ?? "default";
+
               const processed: ProcessedDeposit = {
+                routeId: pendingRoute,
                 transactionHash: depositTxHash,
                 processedAt: BigInt(Date.now()),
                 mirrorTxHash,

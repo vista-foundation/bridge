@@ -176,6 +176,7 @@ export function createApiServer(
       "/api/deposit/register",
       async ({ body }): Promise<ApiRegisterDepositResponse> => {
         const depositEvent: DepositEvent = {
+          routeId: body.routeId ?? config.routes[0]?.id ?? "default",
           transactionHash: body.depositTxHash,
           senderAddress: body.senderAddress,
           recipientAddress: body.recipientAddress,
@@ -211,6 +212,7 @@ export function createApiServer(
           recipientAddress: t.String(),
           amount: t.String(),
           sourceNetwork: t.String(),
+          routeId: t.Optional(t.String()),
         }),
       },
     )

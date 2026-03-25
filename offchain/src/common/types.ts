@@ -1,6 +1,7 @@
 // Bridge message types corresponding to protobuf definitions
 
 export interface DepositEvent {
+  routeId: string; // Which bridge route this deposit belongs to
   transactionHash: string;
   senderAddress: string;
   recipientAddress: string;
@@ -36,6 +37,7 @@ export interface MirrorResponse {
 }
 
 export interface ProcessedDeposit {
+  routeId: string;
   transactionHash: string;
   processedAt: bigint;
   mirrorTxHash: string;
@@ -43,6 +45,7 @@ export interface ProcessedDeposit {
 }
 
 export interface PendingMirror {
+  routeId: string;
   depositTxHash: string;
   deposit: DepositEvent;
   retryCount: number;
@@ -77,16 +80,20 @@ export interface NetworkConfig {
   senderAddresses?: string[]; // For destination network
 }
 
+import type { BridgeRoute } from "./route.js";
+
 export interface BridgeConfig {
+  routes: BridgeRoute[];
+  // Legacy fields kept for backward compat with existing code that reads them
   networks: {
     source: NetworkConfig;
     destination: NetworkConfig;
   };
   bridge: {
     allowedAssets: string[];
-    minDepositAmount: string; // In lovelace
-    maxTransferAmount: string; // In lovelace
-    feeAmount: string; // In lovelace
+    minDepositAmount: string;
+    maxTransferAmount: string;
+    feeAmount: string;
   };
   security: {
     requiredConfirmations: number;

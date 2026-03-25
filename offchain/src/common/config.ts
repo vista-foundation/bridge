@@ -1,6 +1,7 @@
 import { Effect, Context, Layer } from "effect";
 import dotenv from "dotenv";
 import { BridgeConfig } from "./types.js";
+import type { BridgeRoute } from "./route.js";
 
 // Load environment variables from .env file
 dotenv.config();
@@ -31,38 +32,73 @@ const getEnvInt = (key: string, defaultValue: number): number => {
 // Load configuration from environment variables as an Effect
 export const loadConfigFromEnv = Effect.try({
   try: (): BridgeConfig => {
+    // Build legacy source/destination config from env vars
+    const sourceNetwork = {
+      name: getEnv('SOURCE_NETWORK_NAME', 'preproduction'),
+      utxorpcEndpoint: getEnv('SOURCE_UTXORPC_URL', 'https://preprod.utxorpc-v0.demeter.run'),
+      lucidProvider: getEnv('SOURCE_LUCID_PROVIDER', 'https://preprod.koios.rest/api/v1'),
+      lucidNetwork: getEnv('SOURCE_LUCID_NETWORK', 'Preproduction'),
+      depositAddresses: parseAddressList('SOURCE_DEPOSIT_ADDRESSES', [
+        'addr_test1qpnueplse6f4d55eumh7f3tzp3wx882xk7qs6ydxtynrfsw89vzfjf0v4yca056el40n7pr568rdls6lp6eu0dwek9nqku88yp'
+      ]),
+    };
+    const destinationNetwork = {
+      name: getEnv('DEST_NETWORK_NAME', 'preview'),
+      utxorpcEndpoint: getEnv('DEST_UTXORPC_URL', 'https://preview.utxorpc-v0.demeter.run'),
+      lucidProvider: getEnv('DEST_LUCID_PROVIDER', 'https://preview.koios.rest/api/v1'),
+      lucidNetwork: getEnv('DEST_LUCID_NETWORK', 'Preview'),
+      senderAddresses: parseAddressList('DEST_SENDER_ADDRESSES', [
+        'addr_test1qpg5fj3gsmt673lpxlpzhum6mrw2z0hyk3u455swep39zdt6yr3r556e70k6uvrj8jyey6jwnaeamenujatxuqs50ljq2mq4xl'
+      ]),
+    };
+    const bridgeParams = {
+      allowedAssets: parseAddressList('BRIDGE_ALLOWED_ASSETS', ['ADA']),
+      minDepositAmount: getEnv('BRIDGE_MIN_DEPOSIT_AMOUNT', '2000000'),
+      maxTransferAmount: getEnv('BRIDGE_MAX_TRANSFER_AMOUNT', '100000000000'),
+      feeAmount: getEnv('BRIDGE_FEE_AMOUNT', '1000000'),
+    };
+    const securityParams = {
+      requiredConfirmations: getEnvInt('SECURITY_REQUIRED_CONFIRMATIONS', 5),
+      retryAttempts: getEnvInt('SECURITY_RETRY_ATTEMPTS', 3),
+      retryDelayMs: getEnvInt('SECURITY_RETRY_DELAY_MS', 5000),
+    };
+
+    // Build default route from legacy env vars
+    const defaultRoute: BridgeRoute = {
+      id: `${sourceNetwork.name}-to-${destinationNetwork.name}`,
+      source: {
+        chainId: `cardano-${sourceNetwork.name}`,
+        chainType: "cardano",
+        name: sourceNetwork.name,
+        utxorpcEndpoint: sourceNetwork.utxorpcEndpoint,
+        utxorpcApiKey: process.env.SOURCE_UTXORPC_API_KEY,
+        lucidProvider: sourceNetwork.lucidProvider,
+        lucidNetwork: sourceNetwork.lucidNetwork,
+        addresses: sourceNetwork.depositAddresses ?? [],
+      },
+      destination: {
+        chainId: `cardano-${destinationNetwork.name}`,
+        chainType: "cardano",
+        name: destinationNetwork.name,
+        utxorpcEndpoint: destinationNetwork.utxorpcEndpoint,
+        utxorpcApiKey: process.env.DEST_UTXORPC_API_KEY,
+        lucidProvider: destinationNetwork.lucidProvider,
+        lucidNetwork: destinationNetwork.lucidNetwork,
+        addresses: destinationNetwork.senderAddresses ?? [],
+        walletSeed: process.env.DEST_SENDER_WALLET_SEED,
+      },
+      bridge: bridgeParams,
+      security: securityParams,
+    };
+
     const config: BridgeConfig = {
+      routes: [defaultRoute],
       networks: {
-        source: {
-          name: getEnv('SOURCE_NETWORK_NAME', 'preproduction'),
-          utxorpcEndpoint: getEnv('SOURCE_UTXORPC_URL', 'https://preprod.utxorpc-v0.demeter.run'),
-          lucidProvider: getEnv('SOURCE_LUCID_PROVIDER', 'https://preprod.koios.rest/api/v1'),
-          lucidNetwork: getEnv('SOURCE_LUCID_NETWORK', 'Preproduction'),
-          depositAddresses: parseAddressList('SOURCE_DEPOSIT_ADDRESSES', [
-            'addr_test1qpnueplse6f4d55eumh7f3tzp3wx882xk7qs6ydxtynrfsw89vzfjf0v4yca056el40n7pr568rdls6lp6eu0dwek9nqku88yp'
-          ]),
-        },
-        destination: {
-          name: getEnv('DEST_NETWORK_NAME', 'preview'),
-          utxorpcEndpoint: getEnv('DEST_UTXORPC_URL', 'https://preview.utxorpc-v0.demeter.run'),
-          lucidProvider: getEnv('DEST_LUCID_PROVIDER', 'https://preview.koios.rest/api/v1'),
-          lucidNetwork: getEnv('DEST_LUCID_NETWORK', 'Preview'),
-          senderAddresses: parseAddressList('DEST_SENDER_ADDRESSES', [
-            'addr_test1qpg5fj3gsmt673lpxlpzhum6mrw2z0hyk3u455swep39zdt6yr3r556e70k6uvrj8jyey6jwnaeamenujatxuqs50ljq2mq4xl'
-          ]),
-        },
+        source: sourceNetwork,
+        destination: destinationNetwork,
       },
-      bridge: {
-        allowedAssets: parseAddressList('BRIDGE_ALLOWED_ASSETS', ['ADA']),
-        minDepositAmount: getEnv('BRIDGE_MIN_DEPOSIT_AMOUNT', '2000000'),
-        maxTransferAmount: getEnv('BRIDGE_MAX_TRANSFER_AMOUNT', '100000000000'),
-        feeAmount: getEnv('BRIDGE_FEE_AMOUNT', '1000000'),
-      },
-      security: {
-        requiredConfirmations: getEnvInt('SECURITY_REQUIRED_CONFIRMATIONS', 5),
-        retryAttempts: getEnvInt('SECURITY_RETRY_ATTEMPTS', 3),
-        retryDelayMs: getEnvInt('SECURITY_RETRY_DELAY_MS', 5000),
-      },
+      bridge: bridgeParams,
+      security: securityParams,
       grpc: {
         indexerPort: getEnvInt('GRPC_INDEXER_PORT', 50051),
         relayerPort: getEnvInt('GRPC_RELAYER_PORT', 50052),
@@ -152,43 +188,47 @@ export const loadConfigFromFile = (filePath: string): Effect.Effect<BridgeConfig
 
 // Default configuration for testing (fallback)
 export const defaultConfig: BridgeConfig = {
+  routes: [{
+    id: "preproduction-to-preview",
+    source: {
+      chainId: "cardano-preproduction",
+      chainType: "cardano",
+      name: "preproduction",
+      utxorpcEndpoint: "https://cardano-preprod.utxorpc-m1.demeter.run",
+      lucidProvider: "https://preprod.koios.rest/api/v1",
+      lucidNetwork: "Preprod",
+      addresses: ["addr_test1qpnueplse6f4d55eumh7f3tzp3wx882xk7qs6ydxtynrfsw89vzfjf0v4yca056el40n7pr568rdls6lp6eu0dwek9nqku88yp"],
+    },
+    destination: {
+      chainId: "cardano-preview",
+      chainType: "cardano",
+      name: "preview",
+      utxorpcEndpoint: "https://cardano-preview.utxorpc-m1.demeter.run",
+      lucidProvider: "https://preview.koios.rest/api/v1",
+      lucidNetwork: "Preview",
+      addresses: ["addr_test1qpg5fj3gsmt673lpxlpzhum6mrw2z0hyk3u455swep39zdt6yr3r556e70k6uvrj8jyey6jwnaeamenujatxuqs50ljq2mq4xl"],
+    },
+    bridge: { allowedAssets: ["ADA"], minDepositAmount: "1000000", maxTransferAmount: "100000000000", feeAmount: "1000000" },
+    security: { requiredConfirmations: 5, retryAttempts: 3, retryDelayMs: 5000 },
+  }],
   networks: {
     source: {
       name: "preproduction",
-      utxorpcEndpoint: "https://preprod.utxorpc-v0.demeter.run",
+      utxorpcEndpoint: "https://cardano-preprod.utxorpc-m1.demeter.run",
       lucidProvider: "https://preprod.koios.rest/api/v1",
       lucidNetwork: "Preproduction",
-      depositAddresses: [
-        "addr_test1qpnueplse6f4d55eumh7f3tzp3wx882xk7qs6ydxtynrfsw89vzfjf0v4yca056el40n7pr568rdls6lp6eu0dwek9nqku88yp"
-      ],
+      depositAddresses: ["addr_test1qpnueplse6f4d55eumh7f3tzp3wx882xk7qs6ydxtynrfsw89vzfjf0v4yca056el40n7pr568rdls6lp6eu0dwek9nqku88yp"],
     },
     destination: {
       name: "preview",
-      utxorpcEndpoint: "https://preview.utxorpc-v0.demeter.run",
+      utxorpcEndpoint: "https://cardano-preview.utxorpc-m1.demeter.run",
       lucidProvider: "https://preview.koios.rest/api/v1",
       lucidNetwork: "Preview",
-      senderAddresses: [
-        "addr_test1qpg5fj3gsmt673lpxlpzhum6mrw2z0hyk3u455swep39zdt6yr3r556e70k6uvrj8jyey6jwnaeamenujatxuqs50ljq2mq4xl"
-      ],
+      senderAddresses: ["addr_test1qpg5fj3gsmt673lpxlpzhum6mrw2z0hyk3u455swep39zdt6yr3r556e70k6uvrj8jyey6jwnaeamenujatxuqs50ljq2mq4xl"],
     },
   },
-  bridge: {
-    allowedAssets: ["ADA"],
-    minDepositAmount: "1000000", // 1 ADA
-    maxTransferAmount: "100000000000", // 100,000 ADA  
-    feeAmount: "1000000", // 1 ADA
-  },
-  security: {
-    requiredConfirmations: 5,
-    retryAttempts: 3,
-    retryDelayMs: 5000,
-  },
-  grpc: {
-    indexerPort: 50051,
-    relayerPort: 50052,
-    mirrorPort: 50053,
-  },
-  api: {
-    port: 3001,
-  },
+  bridge: { allowedAssets: ["ADA"], minDepositAmount: "1000000", maxTransferAmount: "100000000000", feeAmount: "1000000" },
+  security: { requiredConfirmations: 5, retryAttempts: 3, retryDelayMs: 5000 },
+  grpc: { indexerPort: 50051, relayerPort: 50052, mirrorPort: 50053 },
+  api: { port: 3001 },
 }; 

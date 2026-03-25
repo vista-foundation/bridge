@@ -6,6 +6,10 @@ import type {
   BridgeState,
   MirrorStatus,
 } from "../common/types.js";
+import type { BridgeRoute } from "../common/route.js";
+
+// ── Default route ID for tests ─────────────────────────────────────────
+export const DEFAULT_ROUTE_ID = "default";
 
 // ── Mock deposit events ────────────────────────────────────────────────
 
@@ -13,13 +17,14 @@ export function mockDepositEvent(
   overrides: Partial<DepositEvent> = {},
 ): DepositEvent {
   return {
+    routeId: DEFAULT_ROUTE_ID,
     transactionHash:
       "abc123def456789012345678901234567890123456789012345678901234abcd",
     senderAddress:
       "addr_test1qpnueplse6f4d55eumh7f3tzp3wx882xk7qs6ydxtynrfsw89vzfjf0v4yca056el40n7pr568rdls6lp6eu0dwek9nqku88yp",
     recipientAddress:
       "addr_test1qpg5fj3gsmt673lpxlpzhum6mrw2z0hyk3u455swep39zdt6yr3r556e70k6uvrj8jyey6jwnaeamenujatxuqs50ljq2mq4xl",
-    amount: BigInt(5_000_000), // 5 ADA
+    amount: BigInt(5_000_000),
     assetType: "ADA",
     blockSlot: BigInt(1000),
     blockHash: "blockhash_abc123",
@@ -34,12 +39,13 @@ export function mockProcessedDeposit(
   overrides: Partial<ProcessedDeposit> = {},
 ): ProcessedDeposit {
   return {
+    routeId: DEFAULT_ROUTE_ID,
     transactionHash:
       "processed_tx_hash_0123456789abcdef0123456789abcdef0123456789abcdef01234567",
     processedAt: BigInt(Date.now()),
     mirrorTxHash:
       "mirror_tx_hash_0123456789abcdef0123456789abcdef0123456789abcdef01234567",
-    status: 3 as MirrorStatus, // CONFIRMED
+    status: 3 as MirrorStatus,
     ...overrides,
   };
 }
@@ -48,6 +54,7 @@ export function mockPendingMirror(
   overrides: Partial<PendingMirror> = {},
 ): PendingMirror {
   return {
+    routeId: DEFAULT_ROUTE_ID,
     depositTxHash:
       "pending_tx_hash_0123456789abcdef0123456789abcdef0123456789abcdef01234567",
     deposit: mockDepositEvent({
@@ -72,32 +79,34 @@ export function mockBridgeState(
   };
 }
 
-// ── Mock bridge config ─────────────────────────────────────────────────
+// ── Mock bridge route ──────────────────────────────────────────────────
 
-export function mockBridgeConfig(
-  overrides: Partial<BridgeConfig> = {},
-): BridgeConfig {
+export function mockBridgeRoute(
+  overrides: Partial<BridgeRoute> = {},
+): BridgeRoute {
   return {
-    networks: {
-      source: {
-        name: "preproduction",
-        utxorpcEndpoint: "https://preprod.utxorpc-v0.demeter.run",
-        lucidProvider:
-          "https://preprod.koios.rest/api/v1",
-        lucidNetwork: "Preproduction",
-        depositAddresses: [
-          "addr_test1qpnueplse6f4d55eumh7f3tzp3wx882xk7qs6ydxtynrfsw89vzfjf0v4yca056el40n7pr568rdls6lp6eu0dwek9nqku88yp",
-        ],
-      },
-      destination: {
-        name: "preview",
-        utxorpcEndpoint: "https://preview.utxorpc-v0.demeter.run",
-        lucidProvider: "https://preview.koios.rest/api/v1",
-        lucidNetwork: "Preview",
-        senderAddresses: [
-          "addr_test1qpg5fj3gsmt673lpxlpzhum6mrw2z0hyk3u455swep39zdt6yr3r556e70k6uvrj8jyey6jwnaeamenujatxuqs50ljq2mq4xl",
-        ],
-      },
+    id: DEFAULT_ROUTE_ID,
+    source: {
+      chainId: "cardano-preprod",
+      chainType: "cardano",
+      name: "preproduction",
+      utxorpcEndpoint: "https://cardano-preprod.utxorpc-m1.demeter.run",
+      lucidProvider: "https://preprod.koios.rest/api/v1",
+      lucidNetwork: "Preprod",
+      addresses: [
+        "addr_test1qpnueplse6f4d55eumh7f3tzp3wx882xk7qs6ydxtynrfsw89vzfjf0v4yca056el40n7pr568rdls6lp6eu0dwek9nqku88yp",
+      ],
+    },
+    destination: {
+      chainId: "cardano-preview",
+      chainType: "cardano",
+      name: "preview",
+      utxorpcEndpoint: "https://cardano-preview.utxorpc-m1.demeter.run",
+      lucidProvider: "https://preview.koios.rest/api/v1",
+      lucidNetwork: "Preview",
+      addresses: [
+        "addr_test1qpg5fj3gsmt673lpxlpzhum6mrw2z0hyk3u455swep39zdt6yr3r556e70k6uvrj8jyey6jwnaeamenujatxuqs50ljq2mq4xl",
+      ],
     },
     bridge: {
       allowedAssets: ["ADA"],
@@ -110,6 +119,36 @@ export function mockBridgeConfig(
       retryAttempts: 3,
       retryDelayMs: 5000,
     },
+    ...overrides,
+  };
+}
+
+// ── Mock bridge config ─────────────────────────────────────────────────
+
+export function mockBridgeConfig(
+  overrides: Partial<BridgeConfig> = {},
+): BridgeConfig {
+  const route = mockBridgeRoute();
+  return {
+    routes: [route],
+    networks: {
+      source: {
+        name: "preproduction",
+        utxorpcEndpoint: "https://cardano-preprod.utxorpc-m1.demeter.run",
+        lucidProvider: "https://preprod.koios.rest/api/v1",
+        lucidNetwork: "Preproduction",
+        depositAddresses: route.source.addresses,
+      },
+      destination: {
+        name: "preview",
+        utxorpcEndpoint: "https://cardano-preview.utxorpc-m1.demeter.run",
+        lucidProvider: "https://preview.koios.rest/api/v1",
+        lucidNetwork: "Preview",
+        senderAddresses: route.destination.addresses,
+      },
+    },
+    bridge: route.bridge,
+    security: route.security,
     grpc: {
       indexerPort: 50051,
       relayerPort: 50052,

@@ -259,6 +259,7 @@ const extractDepositsFromTx = async (tx: cardano.Tx, watchedAddress: string): Pr
                 }
 
                 const deposit: DepositEvent = {
+                  routeId: "", // Set by the indexer that calls this
                   transactionHash: txHash,
                   senderAddress,
                   recipientAddress: watchedAddress,
