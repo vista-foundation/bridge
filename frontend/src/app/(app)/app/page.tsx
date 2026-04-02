@@ -7,7 +7,23 @@ import Inventory from "@/components/app/Inventory";
 import BridgePanel from "@/components/app/BridgePanel";
 import TransactionTracker from "@/components/app/TransactionTracker";
 import ToastContainer, { type ToastMessage } from "@/components/app/Toast";
+import PendingTransactionAlert, { type PendingTransaction } from "@/components/app/PendingTransactionAlert";
 import { getInventoryForNetwork, NETWORKS, EMPTY_BALANCES } from "@/lib/app/bridge-data";
+
+// Demo pending transaction — Cardano → Agrologos vADA
+const DEMO_PENDING: PendingTransaction[] = [
+  {
+    id: "tx-001",
+    fromNetwork: "Cardano",
+    toNetwork: "Agrologos",
+    amount: "150",
+    token: "ADA",
+    outputToken: "vADA",
+    timestamp: Date.now() - 45_000,
+    status: "submitted",
+    txHash: "a1b2c3d4e5f6789012345678abcdef0123456789abcdef0123456789abcdef01",
+  },
+];
 
 export default function AppPage() {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -92,6 +108,7 @@ export default function AppPage() {
           />
         </div>
         <div className="flex flex-col gap-[16px]">
+          <PendingTransactionAlert transactions={DEMO_PENDING} />
           <BridgePanel
             onToast={addToast}
             onWalletChange={handleWalletChange}

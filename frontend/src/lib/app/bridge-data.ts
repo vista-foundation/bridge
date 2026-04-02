@@ -52,6 +52,14 @@ export const NETWORKS: Network[] = [
     addressHint: "0x...",
     walletType: "evm",
   },
+  {
+    id: "agrologos",
+    name: "Agrologos",
+    image: "/assets/tokens/agrologos.svg",
+    addressRegex: /^agro[0-9a-z]{38,58}$/i,
+    addressHint: "agro...",
+    walletType: "evm",
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────
@@ -122,6 +130,10 @@ export const WRAPPED_TOKENS: Token[] = [
   // Wrapped versions on BNB Chain
   { symbol: "vADA", name: "Vista ADA", image: "/assets/tokens/ada.png", bgColor: "#ffffff", networks: ["bnb"], isWrapped: true },
   { symbol: "vETH", name: "Vista Ether", image: "/assets/tokens/ethereum.png", bgColor: "#627eea", networks: ["bnb"], isWrapped: true },
+  // Wrapped versions on Agrologos
+  { symbol: "vADA", name: "Vista ADA", image: "/assets/tokens/ada.png", bgColor: "#ffffff", networks: ["agrologos"], isWrapped: true },
+  { symbol: "vETH", name: "Vista Ether", image: "/assets/tokens/ethereum.png", bgColor: "#627eea", networks: ["agrologos"], isWrapped: true },
+  { symbol: "vBTC", name: "Vista Bitcoin", image: "/assets/tokens/bitcoin.png", bgColor: "#f7931a", networks: ["agrologos"], isWrapped: true },
 ];
 
 /** Get native tokens available for bridging on a given network */
