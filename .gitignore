@@ -20,6 +20,10 @@ dist/
 .vscode/
 *.swp
 
+# Claude Code
+.claude/
+CLAUDE.md
+
 # Test artifacts
 test-results/
 playwright-report/

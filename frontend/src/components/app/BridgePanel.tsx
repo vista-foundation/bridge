@@ -23,9 +23,19 @@ const percentages = ["10%", "25%", "50%", "75%", "MAX"];
 
 interface BridgePanelProps {
   onToast?: (toast: ToastMessage) => void;
-  onWalletChange?: (connected: boolean, networkId: string, label: string) => void;
+  onWalletChange?: (connected: boolean, networkId: string, label: string, address: string) => void;
   onNetworkChange?: (fromNetworkId: string) => void;
-  onBridgeSubmit?: (txHash: string) => void;
+  onBridgeSubmit?: (txHash: string, meta: {
+    fromNetworkId: string;
+    fromNetworkName: string;
+    toNetworkId: string;
+    toNetworkName: string;
+    token: string;
+    outputToken: string;
+    amount: string;
+    senderAddress: string;
+    recipientAddress: string;
+  }) => void;
   /** Ref the parent can call .current() to open the wallet modal */
   connectWalletRef?: React.MutableRefObject<(() => void) | null>;
   /** Ref the parent can call .current() to disconnect the wallet */
@@ -110,7 +120,7 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
 
   // Notify parent when wallet connection changes
   useEffect(() => {
-    onWalletChange?.(isWalletConnected || senderAddress.length > 5, fromNetwork.id, walletLabel);
+    onWalletChange?.(isWalletConnected || senderAddress.length > 5, fromNetwork.id, walletLabel, senderAddress);
   }, [isWalletConnected, senderAddress, fromNetwork.id, walletLabel, onWalletChange]);
 
   // ── Bridge result ──────────────────────────────────────────────────
@@ -311,7 +321,17 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
         }
 
         setActiveBridgeTx(txHash);
-        onBridgeSubmit?.(txHash);
+        onBridgeSubmit?.(txHash, {
+          fromNetworkId: fromNetwork.id,
+          fromNetworkName: fromNetwork.name,
+          toNetworkId: toNetwork.id,
+          toNetworkName: toNetwork.name,
+          token: selectedToken.symbol,
+          outputToken: bridgeResult.outputSymbol,
+          amount,
+          senderAddress,
+          recipientAddress: receiverAddress,
+        });
         toast(
           "success",
           `Deposit submitted! TX: ${txHash.slice(0, 16)}...`,

@@ -3,44 +3,7 @@
 import Link from "next/link";
 import Header from "@/components/Header";
 import SolarSystemBackground from "@/components/SolarSystemBackground";
-import type { PendingTransaction } from "@/components/app/PendingTransactionAlert";
-
-// Demo transaction data — Cardano → Agrologos vADA
-const DEMO_TRANSACTIONS: PendingTransaction[] = [
-  {
-    id: "tx-001",
-    fromNetwork: "Cardano",
-    toNetwork: "Agrologos",
-    amount: "150",
-    token: "ADA",
-    outputToken: "vADA",
-    timestamp: Date.now() - 45_000,
-    status: "submitted",
-    txHash: "a1b2c3d4e5f6789012345678abcdef0123456789abcdef0123456789abcdef01",
-  },
-  {
-    id: "tx-002",
-    fromNetwork: "Cardano",
-    toNetwork: "Agrologos",
-    amount: "500",
-    token: "ADA",
-    outputToken: "vADA",
-    timestamp: Date.now() - 3_600_000,
-    status: "confirmed",
-    txHash: "f0e1d2c3b4a596870123456789abcdef0123456789abcdef0123456789abcdef",
-  },
-  {
-    id: "tx-003",
-    fromNetwork: "Cardano",
-    toNetwork: "Agrologos",
-    amount: "75",
-    token: "ADA",
-    outputToken: "vADA",
-    timestamp: Date.now() - 86_400_000,
-    status: "confirmed",
-    txHash: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-  },
-];
+import { useUserDeposits } from "@/lib/app/hooks/useUserDeposits";
 
 const STATUS_STEPS = ["deposited", "pending", "submitted", "confirmed"] as const;
 
@@ -93,7 +56,13 @@ function ProgressBar({ status }: { status: string }) {
   );
 }
 
+function normalizeStatus(status: string): string {
+  return status.toLowerCase();
+}
+
 export default function HistoryPage() {
+  const { deposits, loading } = useUserDeposits();
+
   return (
     <div className="relative min-h-screen bg-black">
       <SolarSystemBackground variant="subtle" />
@@ -119,81 +88,125 @@ export default function HistoryPage() {
             </h1>
           </div>
           <span className="text-[13px] text-[#a1a1a1]">
-            {DEMO_TRANSACTIONS.length} transactions
+            {deposits.length} transaction{deposits.length !== 1 ? "s" : ""}
           </span>
         </div>
 
-        {/* Transaction list */}
-        <div className="w-full max-w-[640px] flex flex-col gap-3">
-          {DEMO_TRANSACTIONS.map((tx) => (
-            <div
-              key={tx.id}
-              className="bg-[#0c0c0c] border border-[#252525] rounded-[12px] p-4 md:p-5 hover:border-[#3a3a3a] transition-colors"
+        {/* Loading state */}
+        {loading && (
+          <div className="w-full max-w-[640px] flex justify-center py-16">
+            <div className="w-6 h-6 border-2 border-[#f59e0b] border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
+
+        {/* Empty state */}
+        {!loading && deposits.length === 0 && (
+          <div className="w-full max-w-[640px] flex flex-col items-center py-16 gap-4">
+            <p className="text-[15px] text-[#a1a1a1]" style={{ fontFamily: "'Inter', sans-serif" }}>
+              No transactions yet
+            </p>
+            <Link
+              href="/app"
+              className="text-[13px] text-[#f59e0b] hover:text-[#fbbf24] transition-colors"
+              style={{ fontFamily: "'Inter', sans-serif" }}
             >
-              {/* Top row: route + status */}
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <span
-                    className="text-[15px] font-semibold text-white"
-                    style={{ fontFamily: "'Inter', sans-serif" }}
-                  >
-                    {tx.amount} {tx.token}
-                  </span>
-                  <svg className="w-4 h-4 text-[#a1a1a1]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                  </svg>
-                  <span
-                    className="text-[15px] font-semibold text-white"
-                    style={{ fontFamily: "'Inter', sans-serif" }}
-                  >
-                    {tx.outputToken}
-                  </span>
-                </div>
-                <StatusBadge status={tx.status} />
-              </div>
+              Start bridging &rarr;
+            </Link>
+          </div>
+        )}
 
-              {/* Progress bar */}
-              <ProgressBar status={tx.status} />
+        {/* Transaction list */}
+        {!loading && deposits.length > 0 && (
+          <div className="w-full max-w-[640px] flex flex-col gap-3">
+            {deposits.map((tx) => {
+              const status = normalizeStatus(tx.status);
+              return (
+                <div
+                  key={tx.txHash}
+                  className="bg-[#0c0c0c] border border-[#252525] rounded-[12px] p-4 md:p-5 hover:border-[#3a3a3a] transition-colors"
+                >
+                  {/* Top row: route + status */}
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="text-[15px] font-semibold text-white"
+                        style={{ fontFamily: "'Inter', sans-serif" }}
+                      >
+                        {tx.amount} {tx.token}
+                      </span>
+                      <svg className="w-4 h-4 text-[#a1a1a1]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                      </svg>
+                      <span
+                        className="text-[15px] font-semibold text-white"
+                        style={{ fontFamily: "'Inter', sans-serif" }}
+                      >
+                        {tx.outputToken}
+                      </span>
+                    </div>
+                    <StatusBadge status={status} />
+                  </div>
 
-              {/* Step labels */}
-              <div className="flex justify-between mt-2 mb-3">
-                {STATUS_STEPS.map((step, i) => {
-                  const currentStep = getStepIndex(tx.status);
-                  const done = i <= currentStep;
-                  return (
-                    <span
-                      key={step}
-                      className={`text-[10px] ${done ? "text-[#a1a1a1]" : "text-[#555]"}`}
-                    >
-                      {step === "deposited"
-                        ? "Deposit"
-                        : step === "pending"
-                          ? "Confirm"
-                          : step === "submitted"
-                            ? "Mirror"
-                            : "Done"}
+                  {/* Progress bar */}
+                  <ProgressBar status={status} />
+
+                  {/* Step labels */}
+                  <div className="flex justify-between mt-2 mb-3">
+                    {STATUS_STEPS.map((step, i) => {
+                      const currentStep = getStepIndex(status);
+                      const done = i <= currentStep;
+                      return (
+                        <span
+                          key={step}
+                          className={`text-[10px] ${done ? "text-[#a1a1a1]" : "text-[#555]"}`}
+                        >
+                          {step === "deposited"
+                            ? "Deposit"
+                            : step === "pending"
+                              ? "Confirm"
+                              : step === "submitted"
+                                ? "Mirror"
+                                : "Done"}
+                        </span>
+                      );
+                    })}
+                  </div>
+
+                  {/* Bottom row: networks + time */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] text-[#a1a1a1]">
+                      {tx.fromNetworkName} &rarr; {tx.toNetworkName}
                     </span>
-                  );
-                })}
-              </div>
+                    <span className="text-[12px] text-[#555]">{formatTime(tx.timestamp)}</span>
+                  </div>
 
-              {/* Bottom row: networks + time */}
-              <div className="flex items-center justify-between">
-                <span className="text-[12px] text-[#a1a1a1]">
-                  {tx.fromNetwork} → {tx.toNetwork}
-                </span>
-                <span className="text-[12px] text-[#555]">{formatTime(tx.timestamp)}</span>
-              </div>
+                  {/* TX hash */}
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="text-[11px] text-[#555] font-mono truncate">
+                      {tx.txHash.slice(0, 16)}...{tx.txHash.slice(-8)}
+                    </span>
+                  </div>
 
-              {/* TX hash */}
-              <div className="mt-2 flex items-center gap-2">
-                <span className="text-[11px] text-[#555] font-mono truncate">
-                  {tx.txHash.slice(0, 16)}...{tx.txHash.slice(-8)}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
+                  {/* Mirror TX hash on success */}
+                  {tx.mirrorTxHash && (
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="text-[11px] text-[#22c55e] font-mono truncate">
+                        Mirror: {tx.mirrorTxHash.slice(0, 16)}...{tx.mirrorTxHash.slice(-8)}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Error message */}
+                  {tx.errorMessage && (
+                    <div className="mt-2 bg-[#f85858]/10 border border-[#f85858]/30 rounded-[6px] px-2 py-1.5">
+                      <span className="text-[11px] text-[#f85858]">{tx.errorMessage}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </main>
     </div>
   );
