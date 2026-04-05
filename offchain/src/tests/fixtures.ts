@@ -6,7 +6,7 @@ import type {
   BridgeState,
   MirrorStatus,
 } from "../common/types.js";
-import type { BridgeRoute } from "../common/route.js";
+import type { BridgeRoute, AssetConfig } from "../common/route.js";
 
 // ── Default route ID for tests ─────────────────────────────────────────
 export const DEFAULT_ROUTE_ID = "default";
@@ -118,6 +118,48 @@ export function mockBridgeRoute(
       requiredConfirmations: 5,
       retryAttempts: 3,
       retryDelayMs: 5000,
+    },
+    ...overrides,
+  };
+}
+
+// ── Mock asset configs ────────────────────────────────────────────────
+
+export const MOCK_THOSKY_POLICY_ID = "aabbccdd11223344556677889900aabbccdd11223344556677889900";
+export const MOCK_THOSKY_ASSET_NAME_HEX = "74484f534b59"; // "tHOSKY"
+export const MOCK_THOSKY_UNIT = MOCK_THOSKY_POLICY_ID + MOCK_THOSKY_ASSET_NAME_HEX;
+
+export const MOCK_VHOSKY_POLICY_ID = "11223344556677889900aabbccdd11223344556677889900aabbccdd";
+export const MOCK_VHOSKY_ASSET_NAME_HEX = "76484f534b59"; // "vHOSKY"
+export const MOCK_VHOSKY_UNIT = MOCK_VHOSKY_POLICY_ID + MOCK_VHOSKY_ASSET_NAME_HEX;
+
+export function mockHoskyAssetConfig(overrides: Partial<AssetConfig> = {}): AssetConfig {
+  return {
+    sourceUnit: MOCK_THOSKY_UNIT,
+    destinationUnit: MOCK_VHOSKY_UNIT,
+    destinationAction: "mint",
+    mintScriptType: "sig",
+    minDepositAmount: "1",
+    maxTransferAmount: "1000000000000000",
+    feeLovelace: "2000000",
+    decimals: 0,
+    ...overrides,
+  };
+}
+
+export function mockBridgeRouteWithTokens(
+  overrides: Partial<BridgeRoute> = {},
+): BridgeRoute {
+  return {
+    ...mockBridgeRoute(),
+    bridge: {
+      allowedAssets: ["ADA", "HOSKY"],
+      minDepositAmount: "2000000",
+      maxTransferAmount: "100000000000",
+      feeAmount: "1000000",
+      assetConfigs: {
+        HOSKY: mockHoskyAssetConfig(),
+      },
     },
     ...overrides,
   };

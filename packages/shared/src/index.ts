@@ -23,13 +23,15 @@ export interface ApiDepositStatus {
   depositTxHash: string;
   mirrorTxHash: string;
   status: DepositStatusType;
-  /** Amount in lovelace (as string) */
+  /** Amount in smallest unit (lovelace for ADA, raw quantity for tokens) */
   amount: string;
   senderAddress: string;
   recipientAddress: string;
   errorMessage?: string;
   /** Unix timestamp in ms (as string) */
   timestamp: string;
+  /** Asset being bridged — "ADA" if omitted */
+  assetType?: string;
 }
 
 export interface ApiBridgeState {
@@ -53,11 +55,13 @@ export interface ApiRegisterDepositRequest {
   depositTxHash: string;
   senderAddress: string;
   recipientAddress: string;
-  /** Amount in lovelace (as string) */
+  /** Amount in smallest unit (lovelace for ADA, raw quantity for tokens) */
   amount: string;
   sourceNetwork: string;
   /** Route ID for multi-route bridges (optional, defaults to first route) */
   routeId?: string;
+  /** Asset being bridged — "ADA" if omitted (backward compat) */
+  assetType?: string;
 }
 
 export interface ApiRegisterDepositResponse {
@@ -73,6 +77,23 @@ export interface ApiErrorResponse {
 
 // ── Bridge routes ──────────────────────────────────────────────────────
 
+/** Per-asset configuration exposed to the frontend */
+export interface ApiAssetConfig {
+  symbol: string;
+  /** policyId+assetNameHex on source chain ("" for ADA) */
+  sourceUnit: string;
+  /** policyId+assetNameHex on destination chain ("" for ADA) */
+  destinationUnit: string;
+  /** "send" = transfer from wallet balance, "mint" = mint via native script */
+  destinationAction: "send" | "mint";
+  minDepositAmount: string;
+  maxTransferAmount: string;
+  /** Fee in lovelace */
+  feeLovelace: string;
+  /** Token decimals for display */
+  decimals: number;
+}
+
 export interface ApiBridgeRoute {
   id: string;
   sourceNetwork: string;
@@ -85,6 +106,8 @@ export interface ApiBridgeRoute {
   maxTransferAmount: string;
   feeAmount: string;
   requiredConfirmations: number;
+  /** Per-asset configs (undefined = ADA-only route using top-level defaults) */
+  assetConfigs?: ApiAssetConfig[];
 }
 
 export interface ApiBridgeRoutesResponse {

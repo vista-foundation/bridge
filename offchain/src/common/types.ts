@@ -5,13 +5,15 @@ export interface DepositEvent {
   transactionHash: string;
   senderAddress: string;
   recipientAddress: string;
-  amount: bigint; // Amount in lovelace
-  assetType: string; // "ADA" for now, future: policy_id
+  amount: bigint; // Amount in smallest unit (lovelace for ADA, token quantity for natives)
+  assetType: string; // "ADA" or token symbol (e.g. "HOSKY")
   blockSlot: bigint;
   blockHash: string;
   outputIndex: number;
   metadata: Record<string, string>; // Transaction metadata
   timestamp: bigint;
+  /** ADA (lovelace) included alongside a token deposit, used for fee coverage */
+  attachedLovelace?: bigint;
 }
 
 export interface MirrorRequest {

@@ -12,12 +12,25 @@ import {
   validateAddress,
   type Network,
   type Token,
+  type WalletBalance,
 } from "@/lib/app/bridge-data";
 import { createToast, type ToastMessage } from "./Toast";
 import ConnectWalletModal from "./ConnectWalletModal";
 import { useBridgeConfig } from "@/lib/app/hooks/useBridgeConfig";
 import { useWalletBalance } from "@/lib/app/hooks/useWalletBalance";
 import { bridgeApi } from "@/lib/app/api-client";
+import type { ApiBridgeRoute } from "@vista-bridge/shared";
+
+/** Map frontend network ID → backend chainId prefix for route matching */
+const NETWORK_CHAIN_MAP: Record<string, string> = {
+  cardano: "cardano-preprod",
+  agrologos: "cardano-preview",
+};
+function findRouteForNetworks(routes: ApiBridgeRoute[], fromId: string, toId: string) {
+  const srcChain = NETWORK_CHAIN_MAP[fromId] ?? fromId;
+  const dstChain = NETWORK_CHAIN_MAP[toId] ?? toId;
+  return routes.find((r) => r.sourceChainId === srcChain && r.destinationChainId === dstChain);
+}
 
 const percentages = ["10%", "25%", "50%", "75%", "MAX"];
 
@@ -36,6 +49,9 @@ interface BridgePanelProps {
     senderAddress: string;
     recipientAddress: string;
   }) => void;
+  onBalanceChange?: (balances: WalletBalance[]) => void;
+  /** Network IDs allowed by backend routes. If empty/undefined, all networks shown. */
+  allowedNetworkIds?: string[];
   /** Ref the parent can call .current() to open the wallet modal */
   connectWalletRef?: React.MutableRefObject<(() => void) | null>;
   /** Ref the parent can call .current() to disconnect the wallet */
@@ -44,10 +60,15 @@ interface BridgePanelProps {
   selectTokenRef?: React.MutableRefObject<((symbol: string) => void) | null>;
 }
 
-export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, onBridgeSubmit, connectWalletRef, disconnectWalletRef, selectTokenRef }: BridgePanelProps) {
+export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, onBridgeSubmit, onBalanceChange, allowedNetworkIds, connectWalletRef, disconnectWalletRef, selectTokenRef }: BridgePanelProps) {
+  // ── Allowed networks (filtered by backend routes) ──────────────────
+  const availableNetworks = allowedNetworkIds?.length
+    ? NETWORKS.filter((n) => allowedNetworkIds.includes(n.id))
+    : NETWORKS;
+
   // ── Network state ──────────────────────────────────────────────────
-  const [fromNetwork, setFromNetwork] = useState<Network>(NETWORKS[0]); // Cardano
-  const [toNetwork, setToNetwork] = useState<Network>(NETWORKS[2]); // Ethereum
+  const [fromNetwork, setFromNetwork] = useState<Network>(availableNetworks[0] ?? NETWORKS[0]);
+  const [toNetwork, setToNetwork] = useState<Network>(availableNetworks[1] ?? availableNetworks[0] ?? NETWORKS[0]);
 
   // ── Token state ────────────────────────────────────────────────────
   const availableTokens = getTokensForNetwork(fromNetwork.id);
@@ -71,7 +92,11 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
   const walletInstanceRef = useRef<any>(null);
 
   // ── Bridge API hooks ────────────────────────────────────────────
-  const { config: bridgeConfig } = useBridgeConfig();
+  const { config: bridgeConfig, loading: configLoading } = useBridgeConfig();
+  const [bridgeRoutes, setBridgeRoutes] = useState<ApiBridgeRoute[]>([]);
+  useEffect(() => {
+    bridgeApi.getRoutes().then((r) => setBridgeRoutes(r.routes)).catch(() => {});
+  }, []);
   const { balances: walletBalances } = useWalletBalance(
     walletInstanceRef.current,
     isWalletConnected ? fromNetwork.id : null,
@@ -109,6 +134,20 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
+  // Reset networks when allowed list changes (routes loaded from backend)
+  useEffect(() => {
+    if (availableNetworks.length > 0) {
+      if (!availableNetworks.find((n) => n.id === fromNetwork.id)) {
+        setFromNetwork(availableNetworks[0]);
+      }
+      if (!availableNetworks.find((n) => n.id === toNetwork.id)) {
+        const fallback = availableNetworks.find((n) => n.id !== fromNetwork.id) ?? availableNetworks[0];
+        setToNetwork(fallback);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allowedNetworkIds]);
+
   // When from-network changes, reset token to first available and notify parent
   useEffect(() => {
     const tokens = getTokensForNetwork(fromNetwork.id);
@@ -123,16 +162,39 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
     onWalletChange?.(isWalletConnected || senderAddress.length > 5, fromNetwork.id, walletLabel, senderAddress);
   }, [isWalletConnected, senderAddress, fromNetwork.id, walletLabel, onWalletChange]);
 
+  // Propagate wallet balances to parent for Inventory
+  useEffect(() => {
+    onBalanceChange?.(walletBalances);
+  }, [walletBalances, onBalanceChange]);
+
+  // Auto-fill receiver address when both networks are Cardano-compatible
+  useEffect(() => {
+    if (fromNetwork.walletType === "cardano" && toNetwork.walletType === "cardano" && senderAddress) {
+      setReceiverAddress(senderAddress);
+    }
+  }, [fromNetwork.walletType, toNetwork.walletType, senderAddress]);
+
   // ── Bridge result ──────────────────────────────────────────────────
   const bridgeResult = getBridgeResult(selectedToken, fromNetwork.id, toNetwork.id);
 
   // ── Derived values ────────────────────────────────────────────────
   const numAmount = parseFloat(amount.replace(/,/g, "")) || 0;
-  const feeAda = bridgeConfig
-    ? Number(BigInt(bridgeConfig.feeAmount)) / 1_000_000
-    : 1; // default 1 ADA fee
-  const receiveAmount =
-    numAmount > feeAda ? (numAmount - feeAda).toFixed(6) : "0";
+  const isAdaSelected = selectedToken.symbol === "ADA";
+
+  // For ADA: fee deducted from amount. For tokens: separate ADA fee.
+  const activeRouteForFee = findRouteForNetworks(bridgeRoutes, fromNetwork.id, toNetwork.id);
+  const tokenAssetCfg = !isAdaSelected
+    ? activeRouteForFee?.assetConfigs?.find((a) => a.symbol === selectedToken.symbol)
+    : undefined;
+
+  const feeAda = tokenAssetCfg
+    ? Number(BigInt(tokenAssetCfg.feeLovelace)) / 1_000_000
+    : bridgeConfig
+      ? Number(BigInt(bridgeConfig.feeAmount)) / 1_000_000
+      : 1;
+  const receiveAmount = isAdaSelected
+    ? (numAmount > feeAda ? (numAmount - feeAda).toFixed(6) : "0")
+    : numAmount > 0 ? numAmount.toString() : "0"; // tokens: 1:1, fee is separate ADA
   const usdValue = ""; // Testnet — no USD value
 
   // ── Handlers ───────────────────────────────────────────────────────
@@ -280,8 +342,12 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
 
     // ── Real bridge flow for Cardano wallets ──────────────────────
     if (fromNetwork.walletType === "cardano" && walletInstanceRef.current) {
-      if (!bridgeConfig?.depositAddresses?.length) {
-        toast("error", "Bridge is not configured. Please try again later.");
+      // Find the active route for this direction
+      const activeRoute = findRouteForNetworks(bridgeRoutes, fromNetwork.id, toNetwork.id);
+      const depositAddress = activeRoute?.depositAddresses?.[0] ?? bridgeConfig?.depositAddresses?.[0];
+
+      if (!depositAddress) {
+        toast("error", "Bridge config loading. Please wait a moment and try again.");
         return;
       }
 
@@ -289,18 +355,42 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
       try {
         const { Transaction } = await import("@meshsdk/core");
         const wallet = walletInstanceRef.current;
-        const depositAddress = bridgeConfig.depositAddresses[0];
-        const lovelace = Math.round(numAmount * 1_000_000).toString();
+        const isAda = selectedToken.symbol === "ADA";
+        const assetCfg = !isAda
+          ? activeRoute?.assetConfigs?.find((a) => a.symbol === selectedToken.symbol)
+          : undefined;
+
+        if (!isAda && !assetCfg) {
+          toast("error", `${selectedToken.symbol} bridging not configured for this route`);
+          setBridging(false);
+          return;
+        }
 
         // Build deposit transaction
         const tx = new Transaction({ initiator: wallet });
-        tx.sendLovelace(depositAddress, lovelace);
-        // Cardano metadata: 64-byte max per string — chunk long addresses
+        let depositAmount: string;
+
+        if (isAda) {
+          // ADA: send lovelace
+          depositAmount = Math.round(numAmount * 1_000_000).toString();
+          tx.sendLovelace(depositAddress, depositAmount);
+        } else {
+          // Native token: send token via sendAssets
+          const decimals = assetCfg!.decimals;
+          depositAmount = Math.round(numAmount * Math.pow(10, decimals)).toString();
+          tx.sendAssets(depositAddress, [
+            { unit: assetCfg!.sourceUnit, quantity: depositAmount },
+          ]);
+        }
+
+        // Cardano metadata v1.1.0: 64-byte max per string — chunk long addresses
+        const chunkedAddr = receiverAddress.length > 64
+          ? [receiverAddress.slice(0, 64), receiverAddress.slice(64)]
+          : receiverAddress;
         tx.setMetadata(1337, {
-          d: receiverAddress.length > 64
-            ? [receiverAddress.slice(0, 64), receiverAddress.slice(64)]
-            : receiverAddress,
-          v: "1.0.0",
+          d: chunkedAddr,
+          a: selectedToken.symbol,
+          v: "1.1.0",
         });
 
         const unsignedTx = await tx.build();
@@ -313,8 +403,10 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
             depositTxHash: txHash,
             senderAddress,
             recipientAddress: receiverAddress,
-            amount: lovelace,
+            amount: depositAmount,
             sourceNetwork: fromNetwork.id,
+            routeId: activeRoute?.id,
+            assetType: selectedToken.symbol,
           });
         } catch {
           // Non-fatal: the indexer will pick it up independently
@@ -458,7 +550,7 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
             ref={fromRef}
             label="From"
             selected={fromNetwork}
-            networks={NETWORKS}
+            networks={availableNetworks}
             exclude={toNetwork.id}
             open={showFromDropdown}
             onToggle={() => { setShowFromDropdown(!showFromDropdown); setShowToDropdown(false); setShowTokenDropdown(false); setShowMobileTokenDropdown(false); }}
@@ -476,7 +568,7 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
             ref={toRef}
             label="To"
             selected={toNetwork}
-            networks={NETWORKS}
+            networks={availableNetworks}
             exclude={fromNetwork.id}
             open={showToDropdown}
             onToggle={() => { setShowToDropdown(!showToDropdown); setShowFromDropdown(false); setShowTokenDropdown(false); setShowMobileTokenDropdown(false); }}
@@ -708,7 +800,7 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
               style={{ fontFamily: "'Inter', sans-serif" }}
             >
               <span className="text-[#a1a1a1]">Fee </span>
-              <span className="text-white">{feeAda} ADA</span>
+              <span className="text-white">{feeAda} ADA{!isAdaSelected ? " (separate)" : ""}</span>
             </span>
           </div>
         </div>
@@ -723,8 +815,8 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
         {/* ── CTA Button ───────────────────────────────────────────── */}
         <button
           onClick={handleBridge}
-          disabled={bridging}
-          className={`${bridging ? "bg-[#f85858]/50 cursor-not-allowed" : "bg-[#f85858] hover:bg-[#f85858]/90"} transition-colors rounded-full h-[53px] flex items-center justify-center gap-[5px] w-full`}
+          disabled={bridging || configLoading}
+          className={`${bridging || configLoading ? "bg-[#f85858]/50 cursor-not-allowed" : "bg-[#f85858] hover:bg-[#f85858]/90"} transition-colors rounded-full h-[53px] flex items-center justify-center gap-[5px] w-full`}
         >
           <Image src="/assets/icons/wallet.svg" alt="wallet" width={16} height={16} />
           <span className="font-bold text-[13px] md:text-[14px] text-white" style={{ fontFamily: "'Raleway', sans-serif" }}>
@@ -743,6 +835,7 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
         onClose={() => { setShowWalletModal(false); setConnectingWallet(null); }}
         onSelect={handleWalletSelect}
         connecting={connectingWallet}
+        walletType={fromNetwork.walletType}
       />
     </div>
   );

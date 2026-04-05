@@ -230,6 +230,31 @@ export const validateConfig = (config: BridgeConfig): void => {
   if (!config.networks.destination.utxorpcEndpoint.startsWith('http')) {
     throw new Error("Destination UTXORPC endpoint must be a valid HTTP(S) URL");
   }
+
+  // Validate per-asset configs on routes
+  for (const route of config.routes) {
+    if (!route.bridge.assetConfigs) continue;
+    for (const [symbol, assetCfg] of Object.entries(route.bridge.assetConfigs)) {
+      if (!route.bridge.allowedAssets.includes(symbol)) {
+        throw new Error(`Route ${route.id}: assetConfig "${symbol}" not in allowedAssets`);
+      }
+      if (assetCfg.destinationAction === "mint" && !assetCfg.mintScriptType) {
+        throw new Error(`Route ${route.id}: asset "${symbol}" has destinationAction "mint" but no mintScriptType`);
+      }
+      // Validate unit format: must be 56+ hex chars (policyId + assetName) or start with PLACEHOLDER
+      for (const field of ["sourceUnit", "destinationUnit"] as const) {
+        const unit = assetCfg[field];
+        if (unit && !unit.startsWith("PLACEHOLDER") && (unit.length < 56 || !/^[0-9a-fA-F]+$/.test(unit))) {
+          console.warn(`⚠️ Route ${route.id}: asset "${symbol}" ${field} "${unit}" does not look like a valid Cardano unit (expected 56+ hex chars)`);
+        }
+      }
+      const assetMin = BigInt(assetCfg.minDepositAmount);
+      const assetMax = BigInt(assetCfg.maxTransferAmount);
+      if (assetMin >= assetMax) {
+        throw new Error(`Route ${route.id}: asset "${symbol}" minDepositAmount must be less than maxTransferAmount`);
+      }
+    }
+  }
 };
 
 // Helper function to load config from file as an Effect

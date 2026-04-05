@@ -65,19 +65,12 @@ const makeUtxorpcService = (config: Context.Tag.Service<Config>): Effect.Effect<
                   }
                 }
               } catch (error) {
-                console.error(`❌ Stream error for address ${addressBech32}:`, error);
-
                 const errorMessage = error instanceof Error ? error.message : String(error);
                 const errorCode = (error as any)?.code;
 
+                // Only log auth errors — transient stream drops are expected and auto-recovered
                 if (errorMessage.includes('Unauthorized') || errorCode === 16) {
-                  console.log('🔍 Authentication failed. Possible causes:');
-                  console.log('  1. API key expired or invalid');
-                  console.log('  2. API key lacks Watch service permissions');
-                  console.log('  3. Endpoint URL is incorrect');
-                  console.log('  4. Header format issue');
-                  console.log(`  5. Current endpoint: ${config.networks.source.utxorpcEndpoint}`);
-                  console.log(`  6. Current headers: ${JSON.stringify(headers)}`);
+                  console.error(`🔑 Authentication failed for ${config.networks.source.utxorpcEndpoint} — check API key`);
                 }
 
                 emit.fail(new UtxorpcError(`Failed to watch addresses: ${error}`, error));
@@ -89,9 +82,7 @@ const makeUtxorpcService = (config: Context.Tag.Service<Config>): Effect.Effect<
               emit.fail(new UtxorpcError(`Failed to start watch streams: ${error}`, error));
             });
 
-            return Effect.sync(() => {
-              console.log("🔌 Closing UTXORPC watch streams");
-            });
+            return Effect.sync(() => {});
           }),
 
         submitTransaction: (txCbor: Uint8Array) =>
@@ -192,89 +183,98 @@ export const UtxorpcLive = Layer.effect(
 // Helper: Convert Bech32 Cardano address to raw bytes
 export const addressToBytes = (addressBech32: string): Uint8Array => {
   try {
-    console.log(`🔄 Converting address to bytes: ${addressBech32}`);
-
     // Decode Cardano bech32 address (addr_test1... / addr1...)
     // Uses bech32 library with extended limit for Cardano's longer addresses
     const decoded = bech32.decode(addressBech32, 200);
-    const addressBytes = new Uint8Array(bech32.fromWords(decoded.words));
-
-    console.log(`✅ Address converted: ${addressBytes.length} bytes (prefix: ${decoded.prefix})`);
-    return addressBytes;
+    return new Uint8Array(bech32.fromWords(decoded.words));
   } catch (error) {
-    console.error(`❌ Failed to decode bech32 address ${addressBech32}:`, error);
-
     // Fallback: try CML
     try {
       const cmlAddress = CML.Address.from_bech32(addressBech32);
-      const addressBytes = cmlAddress.to_raw_bytes();
-      console.log(`✅ Address converted via CML fallback: ${addressBytes.length} bytes`);
-      return addressBytes;
-    } catch {
-      console.log(`⚠️ Using fallback UTF-8 encoding for address ${addressBech32}`);
-      return new TextEncoder().encode(addressBech32);
+      return cmlAddress.to_raw_bytes();
+    } catch (cmlError) {
+      throw new UtxorpcError(
+        `Failed to decode address ${addressBech32}: bech32 error: ${error}, CML error: ${cmlError}`,
+      );
     }
   }
 };
 
-// Helper: Extract deposit information from a transaction
-export const extractDepositsFromTx = async (tx: cardano.Tx, watchedAddress: string): Promise<DepositEvent[]> => {
+/**
+ * Extract deposit information from a transaction.
+ *
+ * @param tx            UTXORPC transaction
+ * @param watchedAddress  Bech32 address to match outputs against
+ * @param allowedAssetUnits  Optional map of on-chain unit (policyId+assetNameHex) → symbol.
+ *                           When provided, native token outputs matching these units are
+ *                           extracted as token deposits. When absent, only ADA is extracted.
+ */
+export const extractDepositsFromTx = async (
+  tx: cardano.Tx,
+  watchedAddress: string,
+  allowedAssetUnits?: Map<string, string>,
+): Promise<DepositEvent[]> => {
   const deposits: DepositEvent[] = [];
 
   try {
     console.log(`🔍 Extracting deposits from transaction for address: ${watchedAddress}`);
 
-    // Extract transaction hash
     const txHash = tx.hash ? Buffer.from(tx.hash).toString('hex') : 'unknown_hash';
+    const metadata = extractMetadata(tx);
 
-    // Parse transaction outputs to find deposits to the watched address
+    // Read the "a" (asset) field from label-1337 metadata.
+    // Default to "ADA" when absent for backward compatibility.
+    const rawMetadataAsset = resolveMetadataAsset(metadata);
+    // Sanitize: alphanumeric, max 20 chars
+    const metadataAsset = /^[A-Za-z0-9]{1,20}$/.test(rawMetadataAsset) ? rawMetadataAsset : "ADA";
+
     if (tx.outputs && tx.outputs.length > 0) {
       for (let outputIndex = 0; outputIndex < tx.outputs.length; outputIndex++) {
         const output = tx.outputs[outputIndex];
 
         if (output?.address && output.coin !== undefined) {
           try {
-            // Convert output address to bech32 for comparison
-            const outputAddressBytes = output.address;
-            const outputAddressBech32 = CML.Address.from_raw_bytes(outputAddressBytes).to_bech32();
+            const outputAddressBech32 = CML.Address.from_raw_bytes(output.address).to_bech32();
+            if (outputAddressBech32 !== watchedAddress) continue;
 
-            // Check if this output is to our watched address
-            if (outputAddressBech32 === watchedAddress) {
-              // Extract ADA amount (lovelace)
-              const adaAmount = BigInt(output.coin);
+            const adaAmount = BigInt(output.coin);
 
-              if (adaAmount > 0) {
-                // Extract sender address from first input (simplified approach)
-                let senderAddress = "unknown_sender";
-                if (tx.inputs && tx.inputs.length > 0) {
-                  const firstInput = tx.inputs[0];
-                  if (firstInput?.asOutput?.address) {
-                    try {
-                      const senderBytes = firstInput.asOutput.address;
-                      senderAddress = CML.Address.from_raw_bytes(senderBytes).to_bech32();
-                    } catch (error) {
-                      console.warn(`⚠️ Could not decode sender address:`, error);
-                    }
-                  }
-                }
+            // Extract sender address from first input
+            const senderAddress = extractSenderAddress(tx);
 
-                const deposit: DepositEvent = {
-                  routeId: "", // Set by the indexer that calls this
-                  transactionHash: txHash,
-                  senderAddress,
-                  recipientAddress: watchedAddress,
-                  amount: adaAmount,
-                  assetType: "ADA",
-                  blockSlot: BigInt(0), // Will be set by the indexer from block context
-                  blockHash: "unknown_block", // Will be set by the indexer from block context
-                  outputIndex,
-                  metadata: extractMetadata(tx),
-                  timestamp: BigInt(Date.now()),
-                };
-
-                deposits.push(deposit);
-                console.log(`💰 Found deposit: ${adaAmount} lovelace to ${watchedAddress} (output ${outputIndex})`);
+            // If metadata says this is a token deposit, look for native tokens
+            if (metadataAsset !== "ADA" && allowedAssetUnits && output.assets && output.assets.length > 0) {
+              const tokenDeposit = extractTokenDeposit(
+                output, metadataAsset, allowedAssetUnits,
+                txHash, senderAddress, watchedAddress, outputIndex, metadata, adaAmount,
+              );
+              if (tokenDeposit) {
+                deposits.push(tokenDeposit);
+                console.log(`💰 Found token deposit: ${tokenDeposit.amount} ${tokenDeposit.assetType} to ${watchedAddress} (output ${outputIndex})`);
+                continue; // Don't also create an ADA deposit for this output
               }
+              // Metadata says token but token not found — skip this output entirely
+              // (don't create a spurious ADA deposit for a failed token match)
+              console.warn(`⚠️ Metadata asset "${metadataAsset}" not found on output ${outputIndex}, skipping`);
+              continue;
+            }
+
+            // ADA deposit (default path — only when metadata is absent or explicitly "ADA")
+            if (adaAmount > 0) {
+              deposits.push({
+                routeId: "",
+                transactionHash: txHash,
+                senderAddress,
+                recipientAddress: watchedAddress,
+                amount: adaAmount,
+                assetType: "ADA",
+                blockSlot: BigInt(0),
+                blockHash: "unknown_block",
+                outputIndex,
+                metadata,
+                timestamp: BigInt(Date.now()),
+              });
+              console.log(`💰 Found deposit: ${adaAmount} lovelace to ${watchedAddress} (output ${outputIndex})`);
             }
           } catch (error) {
             console.warn(`⚠️ Could not process output ${outputIndex}:`, error);
@@ -292,6 +292,95 @@ export const extractDepositsFromTx = async (tx: cardano.Tx, watchedAddress: stri
     console.error(`❌ Error extracting deposits:`, error);
     return [];
   }
+};
+
+/** Extract sender address from the first transaction input. */
+const extractSenderAddress = (tx: cardano.Tx): string => {
+  if (tx.inputs && tx.inputs.length > 0) {
+    const firstInput = tx.inputs[0];
+    if (firstInput?.asOutput?.address) {
+      try {
+        return CML.Address.from_raw_bytes(firstInput.asOutput.address).to_bech32();
+      } catch {
+        // fall through
+      }
+    }
+  }
+  return "unknown_sender";
+};
+
+/**
+ * Read the asset symbol from label-1337 metadata field "a".
+ * Returns "ADA" if missing (backward compat with v1.0.0 metadata).
+ */
+const resolveMetadataAsset = (metadata: Record<string, string>): string => {
+  // Label 1337 metadata is stored under key "1337" as a JSON string
+  const raw = metadata["1337"];
+  if (!raw) return "ADA";
+  try {
+    const parsed = JSON.parse(raw);
+    // "a" field can be at top level or nested in the parsed map
+    if (typeof parsed === "object" && parsed !== null) {
+      if (typeof parsed.a === "string") return parsed.a;
+      // Handle array format from Cardano metadata (map entries)
+      if (Array.isArray(parsed)) {
+        for (const entry of parsed) {
+          if (entry?.a && typeof entry.a === "string") return entry.a;
+        }
+      }
+    }
+  } catch {
+    // Metadata "a" might be stored as a direct key if extractMetadata flattened it
+    if (metadata["a"] && typeof metadata["a"] === "string") return metadata["a"];
+  }
+  return "ADA";
+};
+
+/**
+ * Extract a native token deposit from a UTXORPC output.
+ * Returns null if the output doesn't contain the expected token.
+ */
+const extractTokenDeposit = (
+  output: cardano.TxOutput,
+  assetSymbol: string,
+  allowedAssetUnits: Map<string, string>,
+  txHash: string,
+  senderAddress: string,
+  watchedAddress: string,
+  outputIndex: number,
+  metadata: Record<string, string>,
+  adaAmount: bigint,
+): DepositEvent | null => {
+  if (!output.assets) return null;
+
+  for (const multiasset of output.assets) {
+    const policyIdHex = Buffer.from(multiasset.policyId).toString("hex");
+    for (const asset of multiasset.assets) {
+      const assetNameHex = Buffer.from(asset.name).toString("hex");
+      const unit = policyIdHex + assetNameHex;
+      const quantity = BigInt(asset.outputCoin);
+
+      // Check if this unit matches an allowed asset AND matches the metadata symbol
+      const configSymbol = allowedAssetUnits.get(unit);
+      if (configSymbol && configSymbol === assetSymbol && quantity > 0n) {
+        return {
+          routeId: "",
+          transactionHash: txHash,
+          senderAddress,
+          recipientAddress: watchedAddress,
+          amount: quantity,
+          assetType: assetSymbol,
+          blockSlot: BigInt(0),
+          blockHash: "unknown_block",
+          outputIndex,
+          metadata,
+          timestamp: BigInt(Date.now()),
+          attachedLovelace: adaAmount,
+        };
+      }
+    }
+  }
+  return null;
 };
 
 // Helper: Extract metadata from transaction

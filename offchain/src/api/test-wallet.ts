@@ -152,20 +152,34 @@ export function testWalletRoutes() {
           });
 
           const tx = new Transaction({ initiator: wallet });
-          tx.sendLovelace(body.depositAddress, body.amount);
+
+          if (body.assetUnit && body.assetQuantity) {
+            // Token deposit: send native tokens
+            tx.sendAssets(body.depositAddress, [
+              { unit: body.assetUnit, quantity: body.assetQuantity },
+            ]);
+          } else {
+            // ADA deposit
+            tx.sendLovelace(body.depositAddress, body.amount);
+          }
+
           // Cardano metadata has 64-byte max per string — chunk long addresses
           const dest = body.recipientAddress;
           tx.setMetadata(1337, {
             d: dest.length > 64 ? [dest.slice(0, 64), dest.slice(64)] : dest,
-            v: "1.0.0",
+            a: body.assetType ?? "ADA",
+            v: "1.1.0",
           });
 
           const unsignedTx = await tx.build();
           const signedTx = await wallet.signTx(unsignedTx);
           const txHash = await wallet.submitTx(signedTx);
 
+          const assetLabel = body.assetType && body.assetType !== "ADA"
+            ? `${body.assetQuantity} ${body.assetType}`
+            : `${Number(body.amount) / 1e6} ADA`;
           console.log(`🧪 Test deposit (${network}): ${txHash}`);
-          console.log(`   ${Number(body.amount) / 1e6} ADA → ${body.depositAddress.slice(0, 30)}...`);
+          console.log(`   ${assetLabel} → ${body.depositAddress.slice(0, 30)}...`);
 
           return { txHash, amount: body.amount };
         } catch (err) {
@@ -180,6 +194,9 @@ export function testWalletRoutes() {
           recipientAddress: t.String(),
           amount: t.String(),
           network: t.Optional(t.String()),
+          assetType: t.Optional(t.String()),
+          assetUnit: t.Optional(t.String()),
+          assetQuantity: t.Optional(t.String()),
         }),
       },
     );

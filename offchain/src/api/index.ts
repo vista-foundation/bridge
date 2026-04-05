@@ -4,6 +4,7 @@ import { Effect } from "effect";
 import type { BridgeConfig, DepositEvent, MirrorStatus } from "../common/types.js";
 import { testWalletRoutes } from "./test-wallet.js";
 import type {
+  ApiAssetConfig,
   ApiBridgeConfig,
   ApiBridgeRoute,
   ApiBridgeRoutesResponse,
@@ -105,6 +106,18 @@ export function createApiServer(
         maxTransferAmount: r.bridge.maxTransferAmount,
         feeAmount: r.bridge.feeAmount,
         requiredConfirmations: r.security.requiredConfirmations,
+        ...(r.bridge.assetConfigs && {
+          assetConfigs: Object.entries(r.bridge.assetConfigs).map(([symbol, cfg]): ApiAssetConfig => ({
+            symbol,
+            sourceUnit: cfg.sourceUnit,
+            destinationUnit: cfg.destinationUnit,
+            destinationAction: cfg.destinationAction,
+            minDepositAmount: cfg.minDepositAmount,
+            maxTransferAmount: cfg.maxTransferAmount,
+            feeLovelace: cfg.feeLovelace,
+            decimals: cfg.decimals,
+          })),
+        }),
       })),
     }))
 
@@ -135,6 +148,7 @@ export function createApiServer(
             senderAddress: p.deposit.senderAddress,
             recipientAddress: p.deposit.recipientAddress,
             timestamp: p.deposit.timestamp.toString(),
+            assetType: p.deposit.assetType,
           };
           if (p.errorMessage) item.errorMessage = p.errorMessage;
           return item;
@@ -181,6 +195,7 @@ export function createApiServer(
           senderAddress: pending.deposit.senderAddress,
           recipientAddress: pending.deposit.recipientAddress,
           timestamp: pending.deposit.timestamp.toString(),
+          assetType: pending.deposit.assetType,
         };
         if (pending.errorMessage) item.errorMessage = pending.errorMessage;
         return item;
@@ -200,7 +215,7 @@ export function createApiServer(
           senderAddress: body.senderAddress,
           recipientAddress: body.recipientAddress,
           amount: BigInt(body.amount),
-          assetType: "ADA",
+          assetType: body.assetType ?? "ADA",
           blockSlot: BigInt(0),
           blockHash: "",
           outputIndex: 0,
@@ -232,6 +247,7 @@ export function createApiServer(
           amount: t.String(),
           sourceNetwork: t.String(),
           routeId: t.Optional(t.String()),
+          assetType: t.Optional(t.String()),
         }),
       },
     )
