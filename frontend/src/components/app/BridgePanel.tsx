@@ -7,7 +7,7 @@ import Image from "next/image";
 import {
   NETWORKS,
   TOKENS,
-  getTokensForNetwork,
+  getAllTokensForNetwork,
   getBridgeResult,
   validateAddress,
   type Network,
@@ -70,9 +70,8 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
   const [fromNetwork, setFromNetwork] = useState<Network>(availableNetworks[0] ?? NETWORKS[0]);
   const [toNetwork, setToNetwork] = useState<Network>(availableNetworks[1] ?? availableNetworks[0] ?? NETWORKS[0]);
 
-  // ── Token state ────────────────────────────────────────────────────
-  const availableTokens = getTokensForNetwork(fromNetwork.id);
-  const [selectedToken, setSelectedToken] = useState<Token>(availableTokens[0]);
+  // ── Token state (availableTokens computed below after bridgeRoutes is declared) ─
+  const [selectedToken, setSelectedToken] = useState<Token>(getAllTokensForNetwork(fromNetwork.id)[0]);
 
   // ── Amount state ───────────────────────────────────────────────────
   const [amount, setAmount] = useState("0");
@@ -102,6 +101,14 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
     isWalletConnected ? fromNetwork.id : null,
     isWalletConnected ? senderAddress : null,
   );
+
+  // ── Token list filtered by active route's allowedAssets ─────────
+  const activeRoute = findRouteForNetworks(bridgeRoutes, fromNetwork.id, toNetwork.id);
+  const availableTokens = getAllTokensForNetwork(fromNetwork.id).filter((t) => {
+    if (!activeRoute) return t.symbol === "ADA"; // default to ADA-only while loading
+    const baseSymbol = t.symbol.startsWith("v") ? t.symbol.slice(1) : t.symbol;
+    return activeRoute.allowedAssets.includes(baseSymbol) || activeRoute.allowedAssets.includes(t.symbol);
+  });
 
   // ── Active bridge transaction ───────────────────────────────────
   const [activeBridgeTx, setActiveBridgeTx] = useState<string | null>(null);
@@ -150,12 +157,12 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
 
   // When from-network changes, reset token to first available and notify parent
   useEffect(() => {
-    const tokens = getTokensForNetwork(fromNetwork.id);
-    if (tokens.length > 0 && !tokens.find((t) => t.symbol === selectedToken.symbol)) {
-      setSelectedToken(tokens[0]);
+    if (availableTokens.length > 0 && !availableTokens.find((t) => t.symbol === selectedToken.symbol)) {
+      setSelectedToken(availableTokens[0]);
     }
     onNetworkChange?.(fromNetwork.id);
-  }, [fromNetwork.id, selectedToken.symbol, onNetworkChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromNetwork.id, toNetwork.id, bridgeRoutes, selectedToken.symbol, onNetworkChange]);
 
   // Notify parent when wallet connection changes
   useEffect(() => {
@@ -179,12 +186,12 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
 
   // ── Derived values ────────────────────────────────────────────────
   const numAmount = parseFloat(amount.replace(/,/g, "")) || 0;
-  const isAdaSelected = selectedToken.symbol === "ADA";
+  const isAdaSelected = selectedToken.symbol === "ADA" || selectedToken.symbol === "vADA";
 
   // For ADA: fee deducted from amount. For tokens: separate ADA fee.
-  const activeRouteForFee = findRouteForNetworks(bridgeRoutes, fromNetwork.id, toNetwork.id);
+  const selectedBaseSymbol = selectedToken.symbol.startsWith("v") ? selectedToken.symbol.slice(1) : selectedToken.symbol;
   const tokenAssetCfg = !isAdaSelected
-    ? activeRouteForFee?.assetConfigs?.find((a) => a.symbol === selectedToken.symbol)
+    ? activeRoute?.assetConfigs?.find((a) => a.symbol === selectedBaseSymbol || a.symbol === selectedToken.symbol)
     : undefined;
 
   const feeAda = tokenAssetCfg
@@ -254,13 +261,12 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
    *  Handles wrapped tokens: "vBTC" → selects native "BTC" if available. */
   const selectTokenBySymbol = useCallback(
     (symbol: string) => {
-      const tokens = getTokensForNetwork(fromNetwork.id);
-      // Direct match first (e.g. "HOSKY" on Cardano)
-      let match = tokens.find((t) => t.symbol === symbol);
+      // Direct match first (e.g. "HOSKY" on Cardano, "vHOSKY" on Agrologos)
+      let match = availableTokens.find((t) => t.symbol === symbol);
       // If no direct match and it's a wrapped token, try the unwrapped base
       if (!match && symbol.startsWith("v")) {
         const baseSymbol = symbol.slice(1);
-        match = tokens.find((t) => t.symbol === baseSymbol);
+        match = availableTokens.find((t) => t.symbol === baseSymbol);
       }
       if (match) {
         setSelectedToken(match);
@@ -355,9 +361,11 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
       try {
         const { Transaction } = await import("@meshsdk/core");
         const wallet = walletInstanceRef.current;
-        const isAda = selectedToken.symbol === "ADA";
+        const isAda = selectedToken.symbol === "ADA" || selectedToken.symbol === "vADA";
+        // Route assetConfigs use base symbol (HOSKY), not wrapped (vHOSKY)
+        const baseSymbol = selectedToken.symbol.startsWith("v") ? selectedToken.symbol.slice(1) : selectedToken.symbol;
         const assetCfg = !isAda
-          ? activeRoute?.assetConfigs?.find((a) => a.symbol === selectedToken.symbol)
+          ? activeRoute?.assetConfigs?.find((a) => a.symbol === baseSymbol || a.symbol === selectedToken.symbol)
           : undefined;
 
         if (!isAda && !assetCfg) {
@@ -389,7 +397,7 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
           : receiverAddress;
         tx.setMetadata(1337, {
           d: chunkedAddr,
-          a: selectedToken.symbol,
+          a: baseSymbol,
           v: "1.1.0",
         });
 
@@ -406,7 +414,7 @@ export default function BridgePanel({ onToast, onWalletChange, onNetworkChange, 
             amount: depositAmount,
             sourceNetwork: fromNetwork.id,
             routeId: activeRoute?.id,
-            assetType: selectedToken.symbol,
+            assetType: baseSymbol,
           });
         } catch {
           // Non-fatal: the indexer will pick it up independently
