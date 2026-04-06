@@ -53,16 +53,16 @@ const program = Effect.gen(function* () {
 
     yield* indexer.run.pipe(
       Effect.catchAll((error) => {
-        console.error(`❌ Indexer [${route.id}] failed:`, error);
-        return Effect.fail(error);
+        console.log(`🔄 Indexer [${route.id}] restarting after error: ${error}`);
+        return Effect.void;
       }),
       Effect.fork,
     );
 
     yield* mirror.run.pipe(
       Effect.catchAll((error) => {
-        console.error(`❌ Mirror [${route.id}] failed:`, error);
-        return Effect.fail(error);
+        console.log(`🔄 Mirror [${route.id}] restarting after error: ${error}`);
+        return Effect.void;
       }),
       Effect.fork,
     );
@@ -90,6 +90,16 @@ const main = Effect.scoped(
     ),
   ),
 );
+
+// Prevent unhandled gRPC/network rejections from crashing the process
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  if (msg.includes("ECONNRESET") || msg.includes("premature EOF") || msg.includes("disconnected")) {
+    console.log(`🔄 Network interruption (${msg.slice(0, 60)}), streams will auto-reconnect`);
+  } else {
+    console.error("Unhandled rejection:", reason);
+  }
+});
 
 Effect.runPromise(main as any).catch((error) => {
   console.error("❌ Failed to start bridge:", error);

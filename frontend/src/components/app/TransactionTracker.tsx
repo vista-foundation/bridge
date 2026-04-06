@@ -71,8 +71,8 @@ export default function TransactionTracker({
       {/* Steps */}
       <div className="flex flex-col gap-[4px]">
         {STEPS.map((step, i) => {
-          const isDone = !isFailed && activeStep > i;
-          const isCurrent = !isFailed && activeStep === i;
+          const isDone = !isFailed && (isComplete ? activeStep >= i : activeStep > i);
+          const isCurrent = !isFailed && !isComplete && activeStep === i;
 
           return (
             <div key={step.key} className="flex items-center gap-[12px] py-[8px]">

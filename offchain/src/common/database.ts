@@ -131,7 +131,7 @@ export class DatabaseService {
 
   async loadBridgeState(routeId?: string): Promise<BridgeState> {
     try {
-      console.log('📖 Database: Loading bridge state from database...');
+      // Intentionally quiet — called on every API poll
 
       const routeFilter = routeId ? ` WHERE route_id = ?` : '';
       const routeParams = routeId ? [routeId] : [];
@@ -181,7 +181,7 @@ export class DatabaseService {
         lastProcessedBlockHash: lastBlockHashRow?.value || 'genesis'
       };
 
-      console.log(`✅ Database: Loaded ${processedDeposits.length} processed deposits and ${pendingMirrors.length} pending mirrors`);
+      // Intentionally quiet — called on every API poll
       return bridgeState;
 
     } catch (error) {
