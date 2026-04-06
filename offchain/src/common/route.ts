@@ -9,9 +9,11 @@ export interface AssetConfig {
   sourceUnit: string;
   /** policyId+assetNameHex on destination chain ("" for ADA/lovelace) */
   destinationUnit: string;
+  /** What happens on source after deposit: "lock" (hold) or "burn" (destroy via native script) */
+  sourceAction?: "lock" | "burn";
   /** "send" = transfer from wallet balance, "mint" = mint via native script */
   destinationAction: "send" | "mint";
-  /** For mint: native script type. "sig" = simple key witness */
+  /** For mint/burn: native script type. "sig" = simple key witness */
   mintScriptType?: "sig";
   /** Min deposit in asset's smallest unit */
   minDepositAmount: string;

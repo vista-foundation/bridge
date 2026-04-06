@@ -84,6 +84,8 @@ export interface ApiAssetConfig {
   sourceUnit: string;
   /** policyId+assetNameHex on destination chain ("" for ADA) */
   destinationUnit: string;
+  /** What happens on source: "lock" (hold) or "burn" (destroy). Default "lock" */
+  sourceAction?: "lock" | "burn";
   /** "send" = transfer from wallet balance, "mint" = mint via native script */
   destinationAction: "send" | "mint";
   minDepositAmount: string;

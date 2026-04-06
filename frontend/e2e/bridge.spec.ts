@@ -272,4 +272,46 @@ test.describe("Vista Bridge E2E", () => {
     console.log(`Mirror:  ${result.mirrorTxHash}`);
     console.log("===============================\n");
   });
+
+  // ── Full bridge flow: vHOSKY Preview → tHOSKY Preprod (send) ────
+
+  test("full bridge: vHOSKY preview → tHOSKY preprod (send)", async ({ page }) => {
+    test.setTimeout(180_000);
+
+    const routes = await apiGet("/api/routes");
+    const route = routes.routes.find((r: any) => r.sourceNetwork === "preview");
+    if (!route) {
+      test.skip(true, "No preview-to-preprod route configured");
+      return;
+    }
+
+    const hoskyConfig = route.assetConfigs?.find((a: any) => a.symbol === "HOSKY");
+    if (!hoskyConfig) {
+      test.skip(true, "No HOSKY assetConfig on preview-to-preprod route");
+      return;
+    }
+
+    const walletAddr = (await apiGet("/api/test/wallet/address")).bech32;
+
+    const result = await runBridgeFlow({
+      routeId: route.id,
+      depositAddress: route.depositAddresses[0],
+      recipientAddress: walletAddr,
+      amount: "2000000",
+      sourceNetwork: "preview",
+      network: "preview",
+      label: "vHOSKY→tHOSKY",
+      assetType: "HOSKY",
+      assetUnit: hoskyConfig.sourceUnit,
+      assetQuantity: "500000",
+    });
+
+    expect(result.status).toBe("CONFIRMED");
+    expect(result.mirrorTxHash).toBeTruthy();
+
+    console.log("\n=== vHOSKY → tHOSKY (send) ===");
+    console.log(`Deposit: ${result.depositTxHash}`);
+    console.log(`Mirror:  ${result.mirrorTxHash}`);
+    console.log("===============================\n");
+  });
 });

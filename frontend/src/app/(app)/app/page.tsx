@@ -8,8 +8,9 @@ import BridgePanel from "@/components/app/BridgePanel";
 import TransactionTracker from "@/components/app/TransactionTracker";
 import ToastContainer, { type ToastMessage } from "@/components/app/Toast";
 import PendingTransactionAlert from "@/components/app/PendingTransactionAlert";
-import { getInventoryForNetwork, NETWORKS, EMPTY_BALANCES } from "@/lib/app/bridge-data";
+import { getInventoryForNetwork, NETWORKS, type WalletBalance } from "@/lib/app/bridge-data";
 import { useUserDeposits } from "@/lib/app/hooks/useUserDeposits";
+import { useBridgeRoutes } from "@/lib/app/hooks/useBridgeRoutes";
 
 export default function AppPage() {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -21,6 +22,29 @@ export default function AppPage() {
 
   // ── User deposits (localStorage + live API polling) ────────────────
   const { pending: pendingDeposits, addDeposit } = useUserDeposits();
+
+  // ── Backend routes → allowed networks ─────────────────────────────
+  const { routes } = useBridgeRoutes();
+  const allowedNetworkIds = useMemo(() => {
+    if (routes.length === 0) return ["cardano", "agrologos"]; // default while loading
+    const ids = new Set<string>();
+    // Map backend chainIds (e.g. "cardano-preprod") to frontend network IDs (e.g. "cardano")
+    const chainIdToNetworkId = (chainId: string): string => {
+      if (chainId.startsWith("cardano")) return "cardano";
+      // Strip environment suffix (e.g. "ethereum-sepolia" → "ethereum")
+      return chainId.replace(/-\w+$/, "");
+    };
+    for (const r of routes) {
+      ids.add(chainIdToNetworkId(r.sourceChainId));
+      ids.add(chainIdToNetworkId(r.destinationChainId));
+    }
+    // Agrologos is Cardano-compatible — show it when Cardano routes exist
+    if (ids.has("cardano")) ids.add("agrologos");
+    return Array.from(ids);
+  }, [routes]);
+
+  // ── Wallet balances (propagated from BridgePanel) ─────────────────
+  const [walletBalances, setWalletBalances] = useState<WalletBalance[]>([]);
 
   // ── Active bridge transaction ──────────────────────────────────────
   const [activeBridgeTx, setActiveBridgeTx] = useState<string | null>(null);
@@ -79,12 +103,11 @@ export default function AppPage() {
     });
   }, [addDeposit]);
 
-  // Build inventory items based on the connected network
-  // Uses empty balances — real balances come from useWalletBalance in BridgePanel
+  // Build inventory items from real wallet balances propagated by BridgePanel
   const inventoryItems = useMemo(() => {
     if (!walletConnected || !activeNetworkId) return [];
-    return getInventoryForNetwork(activeNetworkId, EMPTY_BALANCES);
-  }, [walletConnected, activeNetworkId]);
+    return getInventoryForNetwork(activeNetworkId, walletBalances);
+  }, [walletConnected, activeNetworkId, walletBalances]);
 
   // Resolve the display name for the connected network
   const connectedNetworkName = useMemo(() => {
@@ -130,6 +153,8 @@ export default function AppPage() {
             onWalletChange={handleWalletChange}
             onNetworkChange={handleNetworkChange}
             onBridgeSubmit={handleBridgeSubmit}
+            onBalanceChange={setWalletBalances}
+            allowedNetworkIds={allowedNetworkIds}
             connectWalletRef={connectWalletRef}
             disconnectWalletRef={disconnectWalletRef}
             selectTokenRef={selectTokenRef}

@@ -46,6 +46,8 @@ function loadRoutesFromFile(filePath: string): BridgeRoute[] {
     route.source.utxorpcApiKey = route.source.utxorpcApiKey ?? process.env[`${envPrefix}_SOURCE_API_KEY`] ?? process.env.SOURCE_UTXORPC_API_KEY;
     route.destination.utxorpcApiKey = route.destination.utxorpcApiKey ?? process.env[`${envPrefix}_DEST_API_KEY`] ?? process.env.DEST_UTXORPC_API_KEY;
     route.destination.walletSeed = route.destination.walletSeed ?? process.env[`${envPrefix}_DEST_WALLET_SEED`];
+    // Source wallet seed — needed for burn operations on the source chain
+    route.source.walletSeed = route.source.walletSeed ?? process.env[`${envPrefix}_SOURCE_WALLET_SEED`];
   }
 
   return data.routes;

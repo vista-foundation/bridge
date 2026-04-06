@@ -73,7 +73,9 @@
           "HOSKY": {
             "sourceUnit": "beda4fa17335afd1b3a7cd4f63eee4648f28ad1ce182ba1c6faa8b5c76484f534b59",
             "destinationUnit": "18d477cee2bee00475729bcf7da5ca456d07207d192c6cf11ff8fc7574484f534b59",
+            "sourceAction": "burn",
             "destinationAction": "send",
+            "mintScriptType": "sig",
             "minDepositAmount": "1",
             "maxTransferAmount": "1000000000000000",
             "feeLovelace": "2000000",

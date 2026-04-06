@@ -35,54 +35,52 @@ function isTerminal(status: string): boolean {
 /**
  * Reads the user's deposits from localStorage and polls the backend
  * for live status on each non-terminal deposit every `intervalMs`.
- *
- * Uses a ref to always read the latest deposits inside the interval
- * callback, avoiding stale closures. A generation counter discards
- * responses from superseded poll cycles.
  */
 export function useUserDeposits(intervalMs: number = 5000): UseUserDepositsResult {
   const [deposits, setDeposits] = useState<UserDeposit[]>([]);
   const [loading, setLoading] = useState(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const generationRef = useRef(0);
-  // Always-current deposits ref so the interval callback never reads stale state
+  const pollingRef = useRef(false);
+  // Ref so the poll closure always reads fresh deposits without re-triggering the effect
   const depositsRef = useRef(deposits);
   depositsRef.current = deposits;
+
+  const hasNonTerminal = deposits.some((d) => !isTerminal(d.status));
 
   // Initial load from localStorage
   useEffect(() => {
     const stored = loadDeposits();
-    const initial = stored.map(toUserDeposit);
-    setDeposits(initial);
-    depositsRef.current = initial;
+    setDeposits(stored.map(toUserDeposit));
     setLoading(false);
   }, []);
 
   // Poll non-terminal deposits for live status
   useEffect(() => {
-    if (deposits.length === 0) return;
-
-    const stopPolling = () => {
+    if (!hasNonTerminal) {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
-    };
+      return;
+    }
 
-    const poll = () => {
-      // Read latest deposits from ref, not the stale closure
-      const current = depositsRef.current;
-      const needsPoll = current.filter((d) => !isTerminal(d.status));
+    const poll = async () => {
+      if (pollingRef.current) return;
+      pollingRef.current = true;
 
-      if (needsPoll.length === 0) {
-        stopPolling();
-        return;
-      }
+      try {
+        const current = depositsRef.current;
+        const needsPoll = current.filter((d) => !isTerminal(d.status));
+        if (needsPoll.length === 0) return;
 
-      const gen = ++generationRef.current;
+        // Race against a timeout so a stalled fetch doesn't block future polls
+        const POLL_TIMEOUT_MS = 15_000;
+        const updates = await Promise.race([
+          pollDeposits(needsPoll.map((d) => d.txHash)),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), POLL_TIMEOUT_MS)),
+        ]);
 
-      pollDeposits(needsPoll.map((d) => d.txHash)).then((updates) => {
-        if (gen !== generationRef.current) return;
+        if (!updates) return; // timed out — will retry next interval
 
         setDeposits((prev) =>
           prev.map((d) => {
@@ -97,16 +95,21 @@ export function useUserDeposits(intervalMs: number = 5000): UseUserDepositsResul
             };
           }),
         );
-      });
+      } finally {
+        pollingRef.current = false;
+      }
     };
 
     poll();
     intervalRef.current = setInterval(poll, intervalMs);
 
-    return stopPolling;
-    // Re-subscribe when deposits length changes (new deposit added)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deposits.length, intervalMs]);
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [hasNonTerminal, intervalMs]);
 
   const addDeposit = useCallback((meta: DepositMeta) => {
     saveDeposit(meta);

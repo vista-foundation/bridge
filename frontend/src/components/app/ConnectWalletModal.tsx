@@ -68,11 +68,20 @@ const WALLET_CATEGORIES: { label: string; wallets: Omit<WalletInfo, "installed">
 ];
 
 // ── Component ─────────────────────────────────────────────────────────
+/** Maps network walletType to wallet category labels */
+const WALLET_TYPE_TO_CATEGORY: Record<string, string> = {
+  cardano: "Cardano",
+  evm: "EVM Compatible",
+  bitcoin: "BTC",
+};
+
 interface ConnectWalletModalProps {
   open: boolean;
   onClose: () => void;
   onSelect: (walletId: string, category: string) => void;
   connecting: string | null;
+  /** If provided, only show wallet categories matching this wallet type */
+  walletType?: string;
 }
 
 export default function ConnectWalletModal({
@@ -80,6 +89,7 @@ export default function ConnectWalletModal({
   onClose,
   onSelect,
   connecting,
+  walletType,
 }: ConnectWalletModalProps) {
   const [categories, setCategories] = useState<WalletCategory[]>([]);
 
@@ -88,20 +98,23 @@ export default function ConnectWalletModal({
     if (!open) return;
 
     const detect = () => {
-      const detected: WalletCategory[] = WALLET_CATEGORIES.map((cat) => ({
-        label: cat.label,
-        wallets: cat.wallets.map((w) => ({
-          ...w,
-          installed: w.detect(),
-        })),
-      }));
+      const allowedCategory = walletType ? WALLET_TYPE_TO_CATEGORY[walletType] : undefined;
+      const detected: WalletCategory[] = WALLET_CATEGORIES
+        .filter((cat) => !allowedCategory || cat.label === allowedCategory)
+        .map((cat) => ({
+          label: cat.label,
+          wallets: cat.wallets.map((w) => ({
+            ...w,
+            installed: w.detect(),
+          })),
+        }));
       setCategories(detected);
     };
 
     // Small delay so extensions have time to inject
     const timer = setTimeout(detect, 200);
     return () => clearTimeout(timer);
-  }, [open]);
+  }, [open, walletType]);
 
   if (!open) return null;
 

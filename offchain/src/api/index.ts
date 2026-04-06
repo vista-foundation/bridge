@@ -111,6 +111,7 @@ export function createApiServer(
             symbol,
             sourceUnit: cfg.sourceUnit,
             destinationUnit: cfg.destinationUnit,
+            ...(cfg.sourceAction && { sourceAction: cfg.sourceAction }),
             destinationAction: cfg.destinationAction,
             minDepositAmount: cfg.minDepositAmount,
             maxTransferAmount: cfg.maxTransferAmount,

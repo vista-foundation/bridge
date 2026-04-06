@@ -78,6 +78,36 @@ export class CardanoMirror implements IChainMirror {
       const walletAddr: string = yield* Effect.promise(() => wallet.getChangeAddress());
       console.log(`✅ Mirror [${route.id}]: Wallet ${walletAddr}`);
 
+      // ── Source-chain wallet for burn operations ────────────────
+      // Only initialized when a route has assets with sourceAction: "burn"
+      const needsSourceBurn = route.bridge.assetConfigs
+        ? Object.values(route.bridge.assetConfigs).some((c) => c.sourceAction === "burn")
+        : false;
+
+      let sourceWallet: MeshWallet | null = null;
+      let sourceSubmitter: U5CProvider | null = null;
+      if (needsSourceBurn && !route.source.walletSeed) {
+        return yield* Effect.fail(new MirrorError(`Route ${route.id} has sourceAction "burn" but no source wallet seed configured`));
+      }
+      if (needsSourceBurn && route.source.walletSeed) {
+        const srcHeaders: Record<string, string> = {};
+        if (route.source.utxorpcApiKey) srcHeaders["dmtr-api-key"] = route.source.utxorpcApiKey;
+        sourceSubmitter = new U5CProvider({
+          url: route.source.utxorpcEndpoint!,
+          ...(Object.keys(srcHeaders).length > 0 && { headers: srcHeaders }),
+        });
+        const srcKoiosSlug = KOIOS_SLUGS[route.source.name] ?? "preprod";
+        const srcFetcher = new KoiosProvider(srcKoiosSlug);
+        sourceWallet = new MeshWallet({
+          networkId: 0,
+          fetcher: srcFetcher as unknown as IFetcher,
+          submitter: sourceSubmitter as unknown as ISubmitter,
+          key: { type: "mnemonic", words: route.source.walletSeed.split(" ") },
+        });
+        const srcAddr: string = yield* Effect.promise(() => sourceWallet!.getChangeAddress());
+        console.log(`✅ Mirror [${route.id}]: Source wallet for burns: ${srcAddr}`);
+      }
+
       // Helper: extract UTF-8 asset name from a full unit string (policyId + assetNameHex)
       // Mesh SDK mintAsset expects UTF-8 assetName (it hex-encodes internally)
       const assetNameFromUnit = (unit: string): string => {
@@ -187,6 +217,56 @@ export class CardanoMirror implements IChainMirror {
           catch: (error) => new MirrorError(`Confirm failed: ${error}`, error),
         });
 
+      // ── Burn tokens on source chain after destination mirror confirms ─
+      const burnSourceTokens = (deposit: DepositEvent): Effect.Effect<string, MirrorError> =>
+        Effect.tryPromise({
+          try: async () => {
+            const assetCfg = getAssetConfig(route, deposit.assetType);
+            if (assetCfg.sourceAction !== "burn") return ""; // no burn needed
+            if (!sourceWallet || !sourceSubmitter) {
+              throw new Error(`sourceAction is "burn" but source wallet is not configured for route ${route.id}`);
+            }
+
+            const srcAddr = await sourceWallet.getChangeAddress();
+            const forgeScript = ForgeScript.withOneSignature(srcAddr);
+
+            console.log(`🔥 Mirror [${route.id}]: Burning ${deposit.amount} ${deposit.assetType} on ${route.source.name}`);
+
+            // Retry burn — the deposit UTxO may not be synced to Koios yet
+            for (let attempt = 1; attempt <= 5; attempt++) {
+              try {
+                const tx = new Transaction({ initiator: sourceWallet });
+                tx.burnAsset(forgeScript, {
+                  unit: assetCfg.sourceUnit,
+                  quantity: deposit.amount.toString(),
+                });
+                tx.setMetadata(1337, {
+                  msg: ["VISTA Bridge burn", deposit.transactionHash.slice(0, 32)],
+                  a: deposit.assetType,
+                  bridgeVersion: "1.1.0",
+                });
+
+                const unsignedTx = await tx.build();
+                const signedTx = await sourceWallet.signTx(unsignedTx);
+                const burnHash = await sourceSubmitter.submitTx(signedTx);
+
+                console.log(`🔥 Mirror [${route.id}]: Burn tx ${burnHash.slice(0, 16)}... submitted`);
+                return burnHash;
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (attempt < 5 && (msg.includes("UTxO") || msg.includes("input") || msg.includes("Insufficient"))) {
+                  console.log(`⏳ Mirror [${route.id}]: Burn UTxO not synced, retry ${attempt}/5 in ${attempt * 5}s`);
+                  await new Promise((r) => setTimeout(r, attempt * 5000));
+                  continue;
+                }
+                throw err;
+              }
+            }
+            throw new Error("Burn failed after 5 retries");
+          },
+          catch: (error) => new MirrorError(`Burn failed: ${error instanceof Error ? error.message : error}`, error),
+        });
+
       // Track in-flight deposits to prevent concurrent processing
       const inFlight = new Set<string>();
 
@@ -208,17 +288,28 @@ export class CardanoMirror implements IChainMirror {
           inFlight.add(depHash);
 
           try {
+            const assetCfg = getAssetConfig(route, deposit.assetType);
+
             console.log(`🔨 Mirror [${route.id}]: Processing ${depHash.slice(0, 16)}...`);
 
             const signedTx = yield* buildMirrorTx(deposit);
-            const txHash = yield* submitTx(signedTx);
+            const mirrorTxHash = yield* submitTx(signedTx);
 
-            // Mark CONFIRMED immediately after successful submit —
-            // the tx is on-chain, no need to wait for confirmation callback.
-            yield* relayer.updateMirrorStatus(depHash, txHash, "CONFIRMED").pipe(
+            // Mark CONFIRMED immediately — prevents duplicate mirror on retry
+            yield* relayer.updateMirrorStatus(depHash, mirrorTxHash, "CONFIRMED").pipe(
               Effect.mapError((e) => new MirrorError(e.message, e)),
             );
-            console.log(`✅ Mirror [${route.id}]: ${depHash.slice(0, 16)}... → ${txHash.slice(0, 16)}... CONFIRMED`);
+            console.log(`✅ Mirror [${route.id}]: ${depHash.slice(0, 16)}... → ${mirrorTxHash.slice(0, 16)}... CONFIRMED`);
+
+            // Burn source tokens if configured (non-fatal — mirror already confirmed)
+            if (assetCfg.sourceAction === "burn") {
+              yield* burnSourceTokens(deposit).pipe(
+                Effect.catchAll((err) => {
+                  console.error(`❌ Mirror [${route.id}]: Source burn failed: ${err.message}`);
+                  return Effect.void;
+                }),
+              );
+            }
           } finally {
             inFlight.delete(depHash);
           }
