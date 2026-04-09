@@ -21,10 +21,22 @@
         "addresses": ["addr_test1qpg5fj3gsmt673lpxlpzhum6mrw2z0hyk3u455swep39zdt6yr3r556e70k6uvrj8jyey6jwnaeamenujatxuqs50ljq2mq4xl"]
       },
       "bridge": {
-        "allowedAssets": ["ADA"],
+        "allowedAssets": ["ADA", "HOSKY"],
         "minDepositAmount": "2000000",
         "maxTransferAmount": "100000000000",
-        "feeAmount": "1000000"
+        "feeAmount": "1000000",
+        "assetConfigs": {
+          "HOSKY": {
+            "sourceUnit": "18d477cee2bee00475729bcf7da5ca456d07207d192c6cf11ff8fc7574484f534b59",
+            "destinationUnit": "beda4fa17335afd1b3a7cd4f63eee4648f28ad1ce182ba1c6faa8b5c76484f534b59",
+            "destinationAction": "mint",
+            "mintScriptType": "sig",
+            "minDepositAmount": "1",
+            "maxTransferAmount": "1000000000000000",
+            "feeLovelace": "2000000",
+            "decimals": 0
+          }
+        }
       },
       "security": {
         "requiredConfirmations": 5,
@@ -53,10 +65,23 @@
         "addresses": ["addr_test1qpnueplse6f4d55eumh7f3tzp3wx882xk7qs6ydxtynrfsw89vzfjf0v4yca056el40n7pr568rdls6lp6eu0dwek9nqku88yp"]
       },
       "bridge": {
-        "allowedAssets": ["ADA"],
+        "allowedAssets": ["ADA", "HOSKY"],
         "minDepositAmount": "2000000",
         "maxTransferAmount": "100000000000",
-        "feeAmount": "1000000"
+        "feeAmount": "1000000",
+        "assetConfigs": {
+          "HOSKY": {
+            "sourceUnit": "beda4fa17335afd1b3a7cd4f63eee4648f28ad1ce182ba1c6faa8b5c76484f534b59",
+            "destinationUnit": "18d477cee2bee00475729bcf7da5ca456d07207d192c6cf11ff8fc7574484f534b59",
+            "sourceAction": "burn",
+            "destinationAction": "send",
+            "mintScriptType": "sig",
+            "minDepositAmount": "1",
+            "maxTransferAmount": "1000000000000000",
+            "feeLovelace": "2000000",
+            "decimals": 0
+          }
+        }
       },
       "security": {
         "requiredConfirmations": 5,

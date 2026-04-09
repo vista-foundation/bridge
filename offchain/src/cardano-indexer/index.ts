@@ -1,7 +1,8 @@
-import { Effect, Stream } from "effect";
+import { Effect, Stream, Schedule } from "effect";
 import { CardanoWatchClient } from "@utxorpc/sdk";
 import type { IChainIndexer } from "../common/chain-interfaces.js";
 import type { BridgeRoute } from "../common/route.js";
+import { getAssetConfig } from "../common/route.js";
 import type { DepositEvent } from "../common/types.js";
 import { IndexerError } from "../common/types.js";
 import { addressToBytes, extractDepositsFromTx } from "../common/utxorpc.js";
@@ -27,21 +28,33 @@ export class CardanoIndexer implements IChainIndexer {
 
   get run(): Effect.Effect<never, Error> {
     const { route, relayer } = this;
+    // Dedup by tx hash — downstream pipeline (relayer, mirror, DB) keys on tx hash only
     const processedTxHashes = new Set<string>();
+
+    // Build a map of on-chain unit → symbol for token extraction
+    const allowedAssetUnits = new Map<string, string>();
+    if (route.bridge.assetConfigs) {
+      for (const [symbol, cfg] of Object.entries(route.bridge.assetConfigs)) {
+        if (cfg.sourceUnit) {
+          allowedAssetUnits.set(cfg.sourceUnit, symbol);
+        }
+      }
+    }
 
     const validateDeposit = (deposit: DepositEvent): Effect.Effect<void, IndexerError> =>
       Effect.gen(function* () {
-        const minAmount = BigInt(route.bridge.minDepositAmount);
-        const maxAmount = BigInt(route.bridge.maxTransferAmount);
+        if (!route.bridge.allowedAssets.includes(deposit.assetType)) {
+          return yield* Effect.fail(new IndexerError(`Asset ${deposit.assetType} not allowed`));
+        }
+        const assetCfg = getAssetConfig(route, deposit.assetType);
+        const minAmount = BigInt(assetCfg.minDepositAmount);
+        const maxAmount = BigInt(assetCfg.maxTransferAmount);
 
         if (deposit.amount < minAmount) {
           return yield* Effect.fail(new IndexerError(`Amount ${deposit.amount} below min ${minAmount}`));
         }
         if (deposit.amount > maxAmount) {
           return yield* Effect.fail(new IndexerError(`Amount ${deposit.amount} above max ${maxAmount}`));
-        }
-        if (!route.bridge.allowedAssets.includes(deposit.assetType)) {
-          return yield* Effect.fail(new IndexerError(`Asset ${deposit.assetType} not allowed`));
         }
       });
 
@@ -97,7 +110,7 @@ export class CardanoIndexer implements IChainIndexer {
               const txEvents = watchClient.watchTxForAddress(addrBytes);
               for await (const event of txEvents) {
                 if (event.action === "apply" && event.Tx) {
-                  const deposits = await extractDepositsFromTx(event.Tx, address);
+                  const deposits = await extractDepositsFromTx(event.Tx, address, allowedAssetUnits);
                   for (const dep of deposits) {
                     dep.routeId = route.id;
                     emit.single(dep);
@@ -106,30 +119,26 @@ export class CardanoIndexer implements IChainIndexer {
               }
             } catch (error) {
               const msg = error instanceof Error ? error.message : String(error);
-              console.error(`❌ Indexer [${route.id}]: Stream error for ${address}:`, msg);
               emit.fail(new IndexerError(`Watch stream failed: ${msg}`, error));
             }
           })();
         }
 
-        return Effect.sync(() => {
-          console.log(`🔌 Indexer [${route.id}]: Closing watch streams`);
-        });
+        return Effect.sync(() => {});
       });
 
       yield* depositStream.pipe(
         Stream.mapEffect(processDeposit),
-        Stream.catchAll((error) =>
-          Effect.gen(function* () {
-            console.error(`❌ Indexer [${route.id}]: Stream failed, retrying in 30s...`);
-            yield* Effect.sleep("30 seconds");
-            return Effect.fail(new IndexerError(`Stream error: ${error.message}`));
-          }),
-        ),
         Stream.runDrain,
       );
-
-      yield* Effect.never;
-    }) as Effect.Effect<never, Error>;
+    }).pipe(
+      Effect.catchAll((error) =>
+        Effect.gen(function* () {
+          console.log(`🔄 Indexer [${route.id}]: Stream interrupted, reconnecting in 30s...`);
+          yield* Effect.sleep("30 seconds");
+        }),
+      ),
+      Effect.repeat(Schedule.forever),
+    ) as Effect.Effect<never, Error>;
   }
 }

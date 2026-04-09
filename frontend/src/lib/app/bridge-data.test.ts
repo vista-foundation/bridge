@@ -15,8 +15,8 @@ import {
 // ── Network definitions ────────────────────────────────────────────────
 
 describe("NETWORKS", () => {
-  it("has 5 supported networks", () => {
-    expect(NETWORKS).toHaveLength(5);
+  it("has 6 supported networks", () => {
+    expect(NETWORKS).toHaveLength(6);
   });
 
   it("contains cardano, bitcoin, ethereum, solana, bnb", () => {
